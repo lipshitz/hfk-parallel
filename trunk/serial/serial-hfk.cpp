@@ -1,8 +1,3 @@
-// Computes Heegaard Floer knot homology.
-// Some speed improvements due to Marc Culler
-// Compile: g++ -o hfk -O3 hfk-mc.cpp
-// TO do other knots, edit the global values before compiling
-
 #include <time.h>
 #include <iostream>
 #include <stdlib.h>
@@ -30,7 +25,7 @@ class Generator {
 //const int gridsize = 12; // arc-index
 //const int gridsize = 12;
 
-const int gridsize = 11; // arc-index
+const int gridsize = 12; // arc-index
 // Trefoil
 //int white[5] = {1, 2, 3, 4, 0};
 //int black[5] = {4, 0, 1, 2, 3};
@@ -39,11 +34,11 @@ const int gridsize = 11; // arc-index
 //int black[10] = {1,3,9,0,7,5,8,4,6,2};
 
 // Kinoshita-Terasaka KT_{2,1}
-int white[11]={5,10,9,4,8,0,1,6,7,2,3};
-int black[11]={0,6,1,7,10,2,5,9,3,4,8};
+//int white[11]={5,10,9,4,8,0,1,6,7,2,3};
+//int black[11]={0,6,1,7,10,2,5,9,3,4,8};
 
-//int white[12] = {9,5,11,7,8,1,10,4,0,3,2,6};
-//int black[12] = {1,0,4,3,2,6,5,9,8,11,7,10};
+int white[12] = {9,5,11,7,8,1,10,4,0,3,2,6};
+int black[12] = {1,0,4,3,2,6,5,9,8,11,7,10};
 
 
 // Don't waste time computing factorials.  Look them up.
@@ -113,7 +108,7 @@ int  numcomp = NumComp();
    WN[x][y] = WindingNumber(x,y);
   }
  }
- // Record the most negative winding number per row
+ // Record the lowest winding number per row
  int lowestWN[gridsize];
  for( int x = 0; x < gridsize; x++ ) {
    int lowest = 100;
@@ -198,26 +193,21 @@ int  numcomp = NumComp();
  int depth = 0; // this is the index of g we are working on
  int AGrading = AShift;
  while( true ) {
-   if( depth < 0 )
-     break;
-   if ( depth >= gridsize ) { // we are at the end of the recursion, use the permutation
-     //getPerm( getIndex(g), h );
-     //printf("%d %d %d %d %d, index %lld %ld %ld\n", g[0], g[1], g[2], g[3], g[4], getIndex(g), label.size(),  label.max_size() );
-     // Calculate the permutations Alexander Grading
-     //int AGrading = AShift;
-     //for(int i=0; i<gridsize; i++) AGrading -= WN[i][g[i]];
+   if ( depth == gridsize ) { // we are at the end of the recursion, use the permutation
      if (AGrading >= amin && AGrading <= amax) {
        label.push_back(getIndex(g));
        NumGenByAGrading[AGrading+30]++;
      }
-     //printf("%lld\n", getIndex(g));
      depth--;
+     if( depth < 0 )
+       break;
      taken[g[depth]] = 0;
      AGrading += WN[depth][g[depth]];
      continue;
    }
 
    // If there is no hope of getting a non-negative Alexander Grading from here on, decrease the depth
+
    int maxAGrading = AGrading;
    for( int i = depth; i < gridsize; i++ ) {
      maxAGrading -= lowestWN[i];
@@ -233,18 +223,14 @@ int  numcomp = NumComp();
 
    bool callBack = true;
    for( int i = istack[depth]; i < gridsize; i++ ) { // consider using value i for position depth
-     //bool valid = true;
-     //for( int j = 0; j < depth; j++ )
-     //  if( g[j] == i )
-     // valid = false;
-     // if( valid ) {
      if( !taken[i] ) {
        g[depth] = i;
        taken[i] = 1;
        // push onto the stack
        callBack = false;
        istack[depth] = i+1;
-       istack[depth+1] = 0;
+       if( depth < gridsize-1 )
+	 istack[depth+1] = 0;
        AGrading -= WN[depth][g[depth]];
        depth++;
        break;
@@ -258,29 +244,7 @@ int  numcomp = NumComp();
      AGrading += WN[depth][g[depth]];
    }
  }
- // exit(-1);
- /*
- long long count=0;
- // Loop through generators... change the loop for different gridsize
- 
- // This array is a factorial base counter used for counting through
- // permutations. - MC
- short counter[gridsize-1];
- for(int i=0; i<gridsize-1; i++) counter[i] = 0;
-
- for(count = 0; count < Factorial[gridsize]; count++) {
-  NextPerm(counter,g);
-  int AGrading = AShift;
-  for(int i=0; i<gridsize; i++) AGrading -= WN[i][g[i]];
-  if (AGrading >= amin && AGrading <= amax) {
-   label.push_back(count); 
-   NumGenByAGrading[AGrading+30]++;
-  }
- }
- */
- printf("Here1\n");
  cout << "Time to compute all Alexander gradings " << time(NULL)-agStartTime << "\n"; 
- printf("Here1\n");
 
  for(int i=0;i<60;i++) {
   if(NumGenByAGrading[i]>0) cout << "Number of generators in Alexander grading " << (i-30) << ": "  << NumGenByAGrading[i] << "\n";
@@ -632,7 +596,7 @@ long long getIndex( int *P ) {
     for( int j = 0; j < i; j++ )
       if( P[j] < r )
 	m++;
-    index += (r-m)*Factorial[gridsize-1-i];
+    index += Factorial[gridsize-1-i]*(r-m);
   }
   return index;
 }

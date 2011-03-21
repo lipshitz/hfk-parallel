@@ -25,12 +25,12 @@ class Generator {
 
 // Globals
 
-const int gridsize = 11; // arc-index
+const int gridsize = 12; // arc-index
 // Trefoil
 //int white[5] = {1, 2, 3, 4, 0};
 //int black[5] = {4, 0, 1, 2, 3};
-int white[11]={5,10,9,4,8,0,1,6,7,2,3};
-int black[11]={0,6,1,7,10,2,5,9,3,4,8};
+//int white[11]={5,10,9,4,8,0,1,6,7,2,3};
+//int black[11]={0,6,1,7,10,2,5,9,3,4,8};
 //int white[10] = {8,7,6,5,4,3,2,9,1,0};
 //int black[10] = {1,3,9,0,7,5,8,4,6,2};
 
@@ -49,8 +49,8 @@ long long Factorial[16] = {
 //int white[11] = {5,2,3,1,4,6,7,8,9,0};
 //int black[11] = {1,9,0,5,2,3,4,6,7,8};
 
-//int white[12] = {9,5,11,7,8,1,10,4,0,3,2,6};
-//int black[12] = {1,0,4,3,2,6,5,9,8,11,7,10};
+int white[12] = {9,5,11,7,8,1,10,4,0,3,2,6};
+int black[12] = {1,0,4,3,2,6,5,9,8,11,7,10};
 
 //int white[2] = {0,1};
 //int black[2] = {1,0};
