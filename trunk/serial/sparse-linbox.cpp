@@ -4,11 +4,19 @@
 #include <stdio.h>
 #include <vector>
 #include <list>
-#include <string.h>
 #include <algorithm>
+#include <linbox/field/givaro-zpz.h>
+#include <linbox/field/gf2.h>
+#include <linbox/blackbox/zero-one.h>
+#include <linbox/blackbox/sparse.h>
+#include <linbox/field/modular.h>
+#include <linbox/solutions/rank.h>
 using std::list;
 using std::vector;
 using std::cout;
+using std::cin;
+
+using namespace LinBox;
 
 int find_option( int argc, char **argv, const char *option )
 {
@@ -45,7 +53,6 @@ int *white;
 int *black;
 int default_white[12] = {9,5,11,7,8,1,10,4,0,3,2,6};
 int default_black[12] = {1,0,4,3,2,6,5,9,8,11,7,10};
-//const int gridsize = 12; // arc-index
 // Trefoil
 //int white[5] = {1, 2, 3, 4, 0};
 //int black[5] = {4, 0, 1, 2, 3};
@@ -57,8 +64,6 @@ int default_black[12] = {1,0,4,3,2,6,5,9,8,11,7,10};
 //int white[11]={5,10,9,4,8,0,1,6,7,2,3};
 //int black[11]={0,6,1,7,10,2,5,9,3,4,8};
 
-//int white[12] = {9,5,11,7,8,1,10,4,0,3,2,6};
-//int black[12] = {1,0,4,3,2,6,5,9,8,11,7,10};
 
 
 // Don't waste time computing factorials.  Look them up.
@@ -95,7 +100,7 @@ inline int min( int a, int b ) { return a < b ? a : b; }
 
 */
 long long getIndex(int y []); // Returns the number of permutations appearing before y lexicographically
-long long getIndexSwap(int y [], int, int); 
+long long getIndexSwap(int y [], int , int); // Returns the number of permutations appearing before y lexicographically, if two entries were swapped
 int WindingNumber(int x, int y); // Return winding number of the knot projection around (x,y)
 int MaslovGrading(int y []);
 int NumComp(); //Returns the number of components of the link.
@@ -221,6 +226,15 @@ int  numcomp = NumComp();
  
  int NumGenByAGrading[60]; // NumGenByAGrading[i] holds number of generators in A Grading i-30
  vector<long long> label; // label[i] will hold the number of perms lexicographically before the i^th generator
+ // This will hold the generators, sorted by grading, the first index is Agrading+30, the second is Maslov-grading+30
+ std::vector<long long> *generators[60][60];
+ unsigned long imageDimensions[60][60];
+ unsigned long kernelDimensions[60][60];
+ unsigned long homologyDimensions[60][60];
+ for( int i = 0; i < 60; i++ )
+   for( int j = 0; j < 60; j++ )
+     generators[i][j] = new std::vector<long long>();
+ 
  for(int i=0; i<60; i++) NumGenByAGrading[i]=0;
  cout << "Searching through " << Factorial[gridsize] << " generators to compute Alexander gradings...\n";
  time_t agStartTime = time(NULL);
@@ -237,7 +251,8 @@ int  numcomp = NumComp();
  while( true ) {
    if ( depth == gridsize ) { // we are at the end of the recursion, use the permutation
      if (AGrading >= amin && AGrading <= amax) {
-       label.push_back(getIndex(g));
+       int MGrading = MaslovGrading(g);
+       generators[AGrading+30][MGrading+30]->push_back(getIndex(g));
        NumGenByAGrading[AGrading+30]++;
      }
      depth--;
@@ -290,68 +305,112 @@ int  numcomp = NumComp();
  for(int i=0;i<60;i++) {
   if(NumGenByAGrading[i]>0) cout << "Number of generators in Alexander grading " << (i-30) << ": "  << NumGenByAGrading[i] << "\n";
  }
- cout << "Total generators: " << label.size() << "\n";
+ for( int i = 0; i < 60; i++ )
+   for( int j = 0; j < 60; j++ )
+     if (generators[i][j]->size())
+       printf("Alexander grading %d, Maslov grading %d, num generators %lu\n", i-30, j-30, generators[i][j]->size());
  
+
+ typedef LinBox::GivaroZpz<Std16> Field;
+ Field F2(2);
+ Field::Element one;
+ F2.init(one, 1);
+ /*
+ // Try doing alexander grading 0, maslov grading 0
+ LinBox::MatrixRep<Field> A(F2, generators[30][30], generators[30][29], (bool*)Rectangles);
+ printf("A is %lu by %lu\n", A.rowdim(), A.coldim() );
+ // This doesn't work, possibly because of a problem in the transpose-multiply, or possibly because of a problem with the Wiedemann code/algorithm
+ //unsigned long r = rank(r, A, LinBox::Method::Wiedemann());
+ unsigned long r = rank(r, A);
+ printf("Rank is %lu\n", r);
+ */
+ // Calculate the homology groups
+ for( int I = 0; I < 60; I++ )
+   for( int J = 0; J < 59; J++ ) {
+     //     LinBox::MatrixRep<Field> A(F2, generators[i][j+1], generators[i][j], (bool*)Rectangles);
+     std::vector<long long> &cols = *(generators[I][J+1]);
+     std::vector<long long> &rows = *(generators[I][J]);
+     if( cols.size() == 0 || rows.size() == 0 ) {
+       imageDimensions[I][J] = 0;
+       kernelDimensions[I][J] = cols.size();
+       continue;
+     }
+     LinBox::SparseMatrix<Field, Vector<Field>::SparseSeq> A(F2, rows.size(), cols.size());
+     printf("Populating matrix %d %d\n", I, J);
+     for(int index=0; index < cols.size(); index++) {
+       getPerm(cols[index],g);
+       bool firstrect, secondrect;
+       for(int i=0; i<gridsize; i++) {
+	 for(int j=i+1; j<gridsize; j++) {
+	   if(g[i]<g[j]) {
+	     firstrect = Rectangles[i][g[i]][j][g[j]][0];
+	     for(int k=i+1; k<j && firstrect; k++) {
+	       if(g[i] < g[k] && g[k] < g[j]) firstrect=0;
+	     }
+	     secondrect = Rectangles[i][g[i]][j][g[j]][1];
+	     for(int k=0; k<i && secondrect; k++) {
+	       if(g[k]<g[i] || g[k] > g[j]) secondrect=0;
+	     }
+	     for(int k=j+1; k<gridsize && secondrect; k++) {
+	       if(g[k]<g[i] || g[k] > g[j]) secondrect=0;
+	     }
+	   }
+	   if(g[j]<g[i]) {
+	     firstrect = Rectangles[i][g[j]][j][g[i]][2];
+	     for(int k=i+1; k<j && firstrect; k++) {
+	       if(g[k]<g[j] || g[k] > g[i]) firstrect=0;
+	     }
+	     secondrect = Rectangles[i][g[j]][j][g[i]][3];
+	     for(int k=0; k<i && secondrect; k++) {
+	       if(g[k]>g[j] && g[k]<g[i]) secondrect=0;
+	     }
+	     for(int k=j+1; k<gridsize && secondrect; k++) {
+	       if(g[k]>g[j] && g[k]<g[i]) secondrect=0;
+	     }
+	   }
+	   if(firstrect != secondrect) { // Exactly one rectangle is a boundary
+	     int gij [gridsize];
+	     for(int k=0; k<i; k++) {
+	       gij[k] = g[k];
+	     }
+	     gij[i]=g[j];
+	     for(int k=i+1; k<j; k++) {
+	       gij[k]=g[k];
+	     } 
+	     gij[j] = g[i];
+	     for(int k=j+1; k<gridsize; k++) {
+	       gij[k] = g[k];
+	     }
+	     long long Indexgij = getIndex(gij);
+	     int indexgij = Find(rows,Indexgij);
+	     if(indexgij==-1) {cout << "Error with Alexander grading: " << Indexgij << "\n"; return 0; }
+	     A.setEntry(indexgij, index, one);
+	   }
+	 }
+       }
+     }
+     printf("Reducing matrix %d %d\n", I, J);
+     imageDimensions[I][J] = rank(imageDimensions[I][J], A, LinBox::Method::SparseElimination());
+     // This doesn't always work; I suspect the Blackbox routine dousn't work.
+     //imageDimensions[I][J] = rank(imageDimensions[I][J], A);
+     if( imageDimensions[I][J] )
+       printf("im %d %d %lu\n", I, J, imageDimensions[I][J]);
+     kernelDimensions[I][J] = A.coldim() - imageDimensions[I][J];
+     if( kernelDimensions[I][J] )
+       printf("ke %d %d %lu\n", I, J, kernelDimensions[I][J]);
+   }
+ for( int i = 0; i < 60; i++ )
+   for( int j = 1; j < 60; j++ ) {
+     homologyDimensions[i][j] = kernelDimensions[i][j-1] - imageDimensions[i][j];
+     if( homologyDimensions[i][j] )
+       printf("Alexander grading %d Maslov grading %d Homology dimension %lu\n", i-30, j-30, homologyDimensions[i][j]);
+   }
+ // Nothing below here would be expected to work
+ exit(0);
+
  vector<Generator> Graph( label.size() ); // Will hold boundary data.
  cout << "Populating the Graph...\n";
  long long edges=0;
-
- int gij [gridsize];
- for(int index=0; index < label.size(); index++) {
-  getPerm(label[index],g);
-  bool firstrect;
-  bool secondrect;
-  for(int i=0; i<gridsize; i++) {
-    for(int j=i+1; j<gridsize; j++) {
-     if(g[i]<g[j]) {
-      firstrect = Rectangles[i][g[i]][j][g[j]][0];
-	  for(int k=i+1; k<j && firstrect; k++) {
-	   if(g[i] < g[k] && g[k] < g[j]) firstrect=0;
-	  }
-	  secondrect = Rectangles[i][g[i]][j][g[j]][1];
-	  for(int k=0; k<i && secondrect; k++) {
-	   if(g[k]<g[i] || g[k] > g[j]) secondrect=0;
-	  }
-	  for(int k=j+1; k<gridsize && secondrect; k++) {
-	   if(g[k]<g[i] || g[k] > g[j]) secondrect=0;
-	  }
-     }
-     if(g[j]<g[i]) {
-	  firstrect = Rectangles[i][g[j]][j][g[i]][2];
-	  for(int k=i+1; k<j && firstrect; k++) {
-	   if(g[k]<g[j] || g[k] > g[i]) firstrect=0;
-	  }
-	  secondrect = Rectangles[i][g[j]][j][g[i]][3];
-	  for(int k=0; k<i && secondrect; k++) {
-	   if(g[k]>g[j] && g[k]<g[i]) secondrect=0;
-	  }
-	  for(int k=j+1; k<gridsize && secondrect; k++) {
-	   if(g[k]>g[j] && g[k]<g[i]) secondrect=0;
-	  }
-     }
-     if(firstrect != secondrect) { // Exactly one rectangle is a boundary
-	  for(int k=0; k<i; k++) {
-	   gij[k] = g[k];
-	  }
-	  gij[i]=g[j];
-	  for(int k=i+1; k<j; k++) {
-	   gij[k]=g[k];
-	  } 
-	  gij[j] = g[i];
-	  for(int k=j+1; k<gridsize; k++) {
-	   gij[k] = g[k];
-	  }
-	  long long Indexgij = getIndex(gij);
-
-	  int indexgij = Find(label,Indexgij);
-	  if(indexgij==-1) {cout << "Error with Alexander grading: " << Indexgij << "\n"; return 0; }
-	  Graph[index].out.push_back( indexgij );
-	  Graph[indexgij].in.push_back( index );     
-	  edges++;
-     }
-    }
-   }
- }
 
  cout << "Done computing the graph.  Total edges (boundaries): " << edges << ".\n";
  //PrintGraph(Graph);
@@ -428,7 +487,7 @@ int  numcomp = NumComp();
   for(int m=59; m>=0; m--) {
    if( HomologyRanks[m][a] > 0) {
     HFKRanks[m][a] = HomologyRanks[m][a];
-    for(int i=0; i<=min(gridsize-numcomp,min(a,m)); i++) HomologyRanks[m-i][a-i] -= (HFKRanks[m][a] * Factorial[gridsize-numcomp]) / (Factorial[i] * Factorial[gridsize-numcomp-i]);
+    for(int i=0; i<=gridsize-numcomp; i++) HomologyRanks[m-i][a-i] -= (HFKRanks[m][a] * Factorial[gridsize-numcomp]) / (Factorial[i] * Factorial[gridsize-numcomp-i]);
    }
   }
  }
@@ -625,11 +684,6 @@ bool ValidGrid() {
  return 1;
 }
 
-// Code below added by MC
-
-// Maps a permutation of size n to an integer < n!
-// See: Knuth, Volume 2, Section 3.3.2, Algorithm P
-
 long long getIndex( int *P ) {
   long long index = 0;
   for( int i = gridsize-2; i >= 0; i-- ) {
@@ -660,27 +714,3 @@ void getPerm( long long n, int *P ) {
     taken[P[i]] = 1;
   }
 }
-
-long long getIndexSwap( int *P, int I, int J ) {
-  long long index = 0;
-  for( int i = gridsize-2; i >= 0; i-- ) {
-    int r = P[i];
-    if( i == I )
-      r = P[J];
-    if( i == J )
-      r = P[I];
-    int m = 0;
-    for( int j = 0; j < i; j++ ) {
-      int l = P[j];
-      if( j == I )
-	l = P[J];
-      if( j == J )
-	l = P[I];
-      if( l < r )
-	m++;
-    }
-    index += Factorial[gridsize-1-i]*(r-m);
-  }
-  return index;
-}
-
