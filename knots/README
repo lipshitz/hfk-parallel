@@ -1,0 +1,1 @@
+A knot file has three lines.  The first line is the gridsize as an integer.  The second and third are space-separated lists of white and black marks.
