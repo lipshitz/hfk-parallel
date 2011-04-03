@@ -6,7 +6,9 @@
 #include <vector>
 #include <list>
 #include <algorithm>
-#include "matrix.h"
+
+#define FIELD_Z3
+#include "matrix-z2z3.h"
 using std::list;
 using std::vector;
 
@@ -312,8 +314,8 @@ int  numcomp = NumComp();
        kernelDimensions[I][J] = cols.size();
        continue;
      }
-     vector<GeneratorIn> GraphIn( rows.size() ); // Will hold boundary data.
-     vector<GeneratorOut> GraphOut( cols.size() ); // Will hold boundary data.
+     vector<Generator> GraphIn( rows.size() ); // Will hold boundary data.
+     vector<Generator> GraphOut( cols.size() ); // Will hold boundary data.
      long long edges=0;
      printf("Filling %d %d\n", I, J);
      for(int index=0; index < cols.size(); index++) {
@@ -363,47 +365,328 @@ int  numcomp = NumComp();
 	     long long Indexgij = getIndex(gij);
 	     int indexgij = Find(rows,Indexgij);
 	     if(indexgij==-1) {printf("Error with Alexander grading: %lld\n", Indexgij); return 0; }
-	     GraphOut[index].out.push_back( indexgij );
-	     GraphIn[indexgij].in.push_back( index );
+#ifdef FIELD_Z3
+	     //printf("Not implemented\n");
+	     //exit(-1);
+	     GraphOut[index].ones.push_back( indexgij );
+	     GraphIn[indexgij].ones.push_back( index );
+	     // This is, of course, wrong
+#else
+	     GraphOut[index].ones.push_back( indexgij );
+	     GraphIn[indexgij].ones.push_back( index );
+#endif
 	     edges++;
 	   }
 	 }
        }
      }
+     printf("Size is %lu by %lu\n", rows.size(), cols.size());
      if( printMatrices ) {
        char name[10];
        sprintf(name, "mat%d,%d.dat", I, J);
        printf("Writing to mat%d,%d\n", I, J);
-       printf("Size is %lu by %lu\n", rows.size(), cols.size());
        printMatrix( name, GraphOut );
      }
 
      printf("Reducing %d %d\n", I, J);
      for( int i = 0; i < GraphOut.size(); i++ ) {
-       if( (!GraphOut[i].alive) || GraphOut[i].out.size()==0 ) continue;
-       int target = GraphOut[i].out.front(); // We plan to delete the edge from i to target
+#ifdef FIELD_Z3
+       if( (!GraphOut[i].alive) ) continue;
+       int target;
+       int targetVal; // We plan to use target as a pivot, the value is targetVal
+       if( GraphOut[i].ones.size()==0 ) {
+	 if( GraphOut[i].twos.size() == 0 )
+	   continue;
+	 targetVal = 2;
+	 target = GraphOut[i].twos.front();
+       } else {
+	 targetVal = 1;
+	 target = GraphOut[i].ones.front();
+       }
        GraphOut[i].alive = 0;
-       for( list<int>::iterator j = GraphIn[target].in.begin(); j != GraphIn[target].in.end(); j++ ) {
+       // for all rows with a 1 in column target
+       bool add = (targetVal == 2); // whether we add or subtract row i from row j
+       for( list<int>::iterator j = GraphIn[target].ones.begin(); j != GraphIn[target].ones.end(); j++ ) {
 	 if( !GraphOut[*j].alive ) continue;
-	 for( list<int>::iterator k = GraphOut[i].out.begin(); k != GraphOut[i].out.end(); k++ ) {
-	   list<int>::iterator search = find( GraphOut[*j].out.begin(), GraphOut[*j].out.end(), *k);
-	   if( search != GraphOut[*j].out.end() ) {
-	     GraphOut[*j].out.erase(search);
-	     if( *k != target )  {
-	       GraphIn[*k].in.remove(*j);
+
+	 // for all 1s in row i
+	 for( list<int>::iterator k = GraphOut[i].ones.begin(); k != GraphOut[i].ones.end(); k++ ) {
+	   // check if that entry in row j is a 1
+	   list<int>::iterator search = find( GraphOut[*j].ones.begin(), GraphOut[*j].ones.end(), *k);
+	   if( search != GraphOut[*j].ones.end() ) {
+	     if( add ) {
+	       // Change the 1 to a 2
+	       GraphOut[*j].ones.erase(search);
+	       GraphOut[*j].twos.push_back(*search);
+	       if( *k != target )  {
+		 GraphIn[*k].ones.remove(*j);
+		 GraphIn[*k].twos.push_back(*j);
+	       }
+	     } else {
+	       // Remove the 1
+	       GraphOut[*j].ones.erase(search);
+	       if( *k != target )  {
+		 GraphIn[*k].ones.remove(*j);
+	       }
 	     }
 	   } else {
-	     GraphOut[*j].out.push_back(*k);
-	     GraphIn[*k].in.push_back(*j);
+	     // check if that entry in row j is a 2
+	     search = find( GraphOut[*j].twos.begin(), GraphOut[*j].twos.end(), *k);
+	     if( search != GraphOut[*j].twos.end() ) {
+	       if( add ) {
+		 // Remove the 2
+		 GraphOut[*j].twos.erase(search);
+		 if( *k != target )  {
+		   GraphIn[*k].twos.remove(*j);
+		 }
+	       } else {
+		 // Change the 2 to a 1
+		 GraphOut[*j].twos.erase(search);
+		 GraphOut[*j].ones.push_back(*search);
+		 if( *k != target )  {
+		   GraphIn[*k].twos.remove(*j);
+		   GraphIn[*k].ones.push_back(*j);
+		 }
+	       }
+	     }
+	     else {
+	       // the entry in row j is a 0
+	       if( add ) {
+		 // Set it to one
+		 GraphOut[*j].ones.push_back(*k);
+		 if( *k != target )  {
+		   GraphIn[*k].ones.push_back(*j);
+		 }
+	       } else {
+		 // Set it to two
+		 GraphOut[*j].twos.push_back(*k);
+		 if( *k != target )  {
+		   GraphIn[*k].twos.push_back(*j);
+		 }
+	       }
+	     }
+	   }
+	 }
+		 
+	 // for all 2s in row i
+	 for( list<int>::iterator k = GraphOut[i].twos.begin(); k != GraphOut[i].twos.end(); k++ ) {
+	   // check if that entry in row j is a 1
+	   list<int>::iterator search = find( GraphOut[*j].ones.begin(), GraphOut[*j].ones.end(), *k);
+	   if( search != GraphOut[*j].ones.end() ) {
+	     if( !add ) {
+	       // Change the 1 to a 2
+	       GraphOut[*j].ones.erase(search);
+	       GraphOut[*j].twos.push_back(*search);
+	       if( *k != target )  {
+		 GraphIn[*k].ones.remove(*j);
+		 GraphIn[*k].twos.push_back(*j);
+	       }
+	     } else {
+	       // Remove the 1
+	       GraphOut[*j].ones.erase(search);
+	       if( *k != target )  {
+		 GraphIn[*k].ones.remove(*j);
+	       }
+	     }
+	   } else {
+	     // check if that entry in row j is a 2
+	     search = find( GraphOut[*j].twos.begin(), GraphOut[*j].twos.end(), *k);
+	     if( search != GraphOut[*j].twos.end() ) {
+	       if( !add ) {
+		 // Remove the 2
+		 GraphOut[*j].twos.erase(search);
+		 if( *k != target )  {
+		   GraphIn[*k].twos.remove(*j);
+		 }
+	       } else {
+		 // Change the 2 to a 1
+		 GraphOut[*j].twos.erase(search);
+		 GraphOut[*j].ones.push_back(*search);
+		 if( *k != target )  {
+		   GraphIn[*k].twos.remove(*j);
+		   GraphIn[*k].ones.push_back(*j);
+		 }
+	       }
+	     }
+	     else {
+	       // the entry in row j is a 0
+	       if( !add ) {
+		 // Set it to one
+		 GraphOut[*j].ones.push_back(*k);		 
+		 if( *k != target )  {
+		   GraphIn[*k].ones.push_back(*j);
+		 }
+	       } else {
+		 // Set it to two
+		 GraphOut[*j].twos.push_back(*k);
+		 if( *k != target )  {
+		 GraphIn[*k].twos.push_back(*j);
+		 }
+	       }
+	     }
+	   }
+
+	 }
+	 
+       }
+       GraphIn[target].ones.clear();
+
+
+       // for all rows with a 2 in column target
+       add = (targetVal == 1); // whether we add or subtract row i from row j
+       for( list<int>::iterator j = GraphIn[target].twos.begin(); j != GraphIn[target].twos.end(); j++ ) {
+
+	 if( !GraphOut[*j].alive ) continue;
+
+	 // for all 1s in row i
+	 for( list<int>::iterator k = GraphOut[i].ones.begin(); k != GraphOut[i].ones.end(); k++ ) {
+	   // check if that entry in row j is a 1
+	   list<int>::iterator search = find( GraphOut[*j].ones.begin(), GraphOut[*j].ones.end(), *k);
+	   if( search != GraphOut[*j].ones.end() ) {
+	     if( add ) {
+	       // Change the 1 to a 2
+	       GraphOut[*j].ones.erase(search);
+	       GraphOut[*j].twos.push_back(*search);
+	       if( *k != target )  {
+		 GraphIn[*k].ones.remove(*j);
+		 GraphIn[*k].twos.push_back(*j);
+	       }
+	     } else {
+	       // Remove the 1
+	       GraphOut[*j].ones.erase(search);
+	       if( *k != target )  {
+		 GraphIn[*k].ones.remove(*j);
+	       }
+	     }
+	   } else {
+	     // check if that entry in row j is a 2
+	     search = find( GraphOut[*j].twos.begin(), GraphOut[*j].twos.end(), *k);
+	     if( search != GraphOut[*j].twos.end() ) {
+	       if( add ) {
+		 // Remove the 2
+		 GraphOut[*j].twos.erase(search);
+		 if( *k != target )  {
+		   GraphIn[*k].twos.remove(*j);
+		 }
+	       } else {
+		 // Change the 2 to a 1
+		 GraphOut[*j].twos.erase(search);
+		 GraphOut[*j].ones.push_back(*search);
+		 if( *k != target )  {
+		   GraphIn[*k].twos.remove(*j);
+		   GraphIn[*k].ones.push_back(*j);
+		 }
+	       }
+	     }
+	     else {
+	       // the entry in row j is a 0
+	       if( add ) {
+		 // Set it to one
+		 GraphOut[*j].ones.push_back(*k);
+		 if( *k != target )  {
+		   GraphIn[*k].ones.push_back(*j);
+		 }
+	       } else {
+		 // Set it to two
+		 GraphOut[*j].twos.push_back(*k);
+		 if( *k != target )  {
+		   GraphIn[*k].twos.push_back(*j);
+		 }
+	       }
+	     }
+	   }
+	 }
+	 
+	 // for all 2s in row i
+	 for( list<int>::iterator k = GraphOut[i].twos.begin(); k != GraphOut[i].twos.end(); k++ ) {
+	   // check if that entry in row j is a 1
+	   list<int>::iterator search = find( GraphOut[*j].ones.begin(), GraphOut[*j].ones.end(), *k);
+	   if( search != GraphOut[*j].ones.end() ) {
+	     if( !add ) {
+	       // Change the 1 to a 2
+	       GraphOut[*j].ones.erase(search);
+	       GraphOut[*j].twos.push_back(*search);
+	       if( *k != target )  {
+		 GraphIn[*k].ones.remove(*j);
+		 GraphIn[*k].twos.push_back(*j);
+	       }
+	     } else {
+	       // Remove the 1
+	       GraphOut[*j].ones.erase(search);
+	       if( *k != target )  {
+		 GraphIn[*k].ones.remove(*j);
+	       }
+	     }
+	   } else {
+	     // check if that entry in row j is a 2
+	     search = find( GraphOut[*j].twos.begin(), GraphOut[*j].twos.end(), *k);
+	     if( search != GraphOut[*j].twos.end() ) {
+	       if( !add ) {
+		 // Remove the 2
+		 GraphOut[*j].twos.erase(search);
+		 if( *k != target )  {
+		   GraphIn[*k].twos.remove(*j);
+		 }
+	       } else {
+		 // Change the 2 to a 1
+		 GraphOut[*j].twos.erase(search);
+		 GraphOut[*j].ones.push_back(*search);
+		 if( *k != target )  {
+		   GraphIn[*k].twos.remove(*j);
+		   GraphIn[*k].ones.push_back(*j);
+		 }
+	       }
+	     }
+	     else {
+	       // the entry in row j is a 0
+	       if( !add ) {
+		 // Set it to one
+		 GraphOut[*j].ones.push_back(*k);
+		 if( *k != target )  {		 
+		   GraphIn[*k].ones.push_back(*j);
+		 }
+	       } else {
+		 // Set it to two
+		 GraphOut[*j].twos.push_back(*k);
+		 if( *k != target )  {
+		   GraphIn[*k].twos.push_back(*j);
+		 }
+	       }
+	     }
+	   }
+
+	 }
+	 
+
+
+       }
+
+
+
+       GraphIn[target].twos.clear();
+#else
+       if( (!GraphOut[i].alive) || GraphOut[i].ones.size()==0 ) continue;
+       int target = GraphOut[i].ones.front(); // We plan to delete the edge from i to target
+       GraphOut[i].alive = 0;
+       for( list<int>::iterator j = GraphIn[target].ones.begin(); j != GraphIn[target].ones.end(); j++ ) {
+	 if( !GraphOut[*j].alive ) continue;
+	 for( list<int>::iterator k = GraphOut[i].ones.begin(); k != GraphOut[i].ones.end(); k++ ) {
+	   list<int>::iterator search = find( GraphOut[*j].ones.begin(), GraphOut[*j].ones.end(), *k);
+	   if( search != GraphOut[*j].ones.end() ) {
+	     GraphOut[*j].ones.erase(search);
+	     if( *k != target )  {
+	       GraphIn[*k].ones.remove(*j);
+	     }
+	   } else {
+	     GraphOut[*j].ones.push_back(*k);
+	     if( *k != target )  {
+	       GraphIn[*k].ones.push_back(*j);
+	     }
 	   }
 	 }
        }
-       //for( list<int>::iterator j = GraphOut[i].out.begin(); j != GraphOut[i].out.end(); j++ )
-       //	 GraphIn[*j].in.remove(i);
-       
-       //GraphIn[target].alive = 0;
-       GraphIn[target].in.clear();
-       //GraphOut[i].out.clear();
+       GraphIn[target].ones.clear();
+#endif
      }
      kernelDimensions[I][J] = 0;
      for( int i = 0; i < GraphOut.size(); i++ ) {
@@ -414,7 +697,7 @@ int  numcomp = NumComp();
      printf("Rank is %llu\n", imageDimensions[I][J]);
      printf("------------\n");
    }
-
+ 
  for( int i = 0; i < 60; i++ )
    for( int j = 1; j < 60; j++ ) {
      homologyDimensions[i][j] = kernelDimensions[i][j-1] - imageDimensions[i][j];
