@@ -1,13 +1,13 @@
 #include <time.h>
 #include <iostream>
 #include <stdlib.h>
+#include "mpi.h"
 #include <stdio.h>
 #include <string.h>
 #include <vector>
 #include <list>
 #include <algorithm>
 
-#include <mpi.h>
 
 //#define FIELD_Z3
 //#include "matrix-z2z3.h"
@@ -110,13 +110,13 @@ int main(int argc, char *argv[]){
  MPI_Init( &argc, &argv );
  MPI_Comm_size( MPI_COMM_WORLD, &n_proc );
  MPI_Comm_rank( MPI_COMM_WORLD, &rank );
-
+ 
  char *knotFile = read_string( argc, argv, "-k", NULL );
  bool printMatrices = read_int( argc, argv, "-p", 0 );
  if( knotFile ) {
    FILE *f = fopen(knotFile, "r");
    if( !f ) {
-     printf("Error opening file %s by rank %d\n", knotFile, rank);
+     printf("Error opening file %s\n", knotFile);
      exit(-1);
    }
    fscanf(f, "%d\n", &gridsize);
@@ -229,7 +229,6 @@ int main(int argc, char *argv[]){
  // Populate Graph[count].
 
  
- int NumGenByAGrading[60]; // NumGenByAGrading[i] holds number of generators in A Grading i-30
  vector<long long> label; // label[i] will hold the number of perms lexicographically before the i^th generator
  // This will hold the generators, sorted by grading, the first index is Agrading+30, the second is Maslov-grading+30
  std::vector<long long> *generators[60][60];
@@ -240,36 +239,35 @@ int main(int argc, char *argv[]){
    for( int j = 0; j < 60; j++ )
      generators[i][j] = new std::vector<long long>();
  
- for(int i=0; i<60; i++) NumGenByAGrading[i]=0;
  if( rank == 0 )
    printf("Searching through %lld generators to compute Alexander gradings...\n", Factorial[gridsize]);
  time_t agStartTime = time(NULL);
 
  const int min_depth = 2; // This is the depth from which the master hands out packets
+ int num_generators[60*60];
  if( rank == 0 ) {
    // Assign the partitions and collect the results
    long long prefix_max = 1;
    for( int i = gridsize; i > gridsize-min_depth; i-- )
      prefix_max *= i;
    for( long long i = n_proc-1; i < prefix_max+n_proc-1; i++ ) { // the processors will figure out their initial assignments on their own
-     printf("Here1 %lld\n", i);
      long long permnum = i * Factorial[gridsize-min_depth];
      if( i >= prefix_max )
        permnum = -1;
-     int num_generators[60][60];
-     MPI_Status *stat;
+     MPI_Status status;
      // Wait for a thread to ask for more
-     printf("Here2 %lld\n", i);
-     MPI_Recv( num_generators, 60*60, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, stat );
-     int proc = stat->MPI_SOURCE;
+     MPI_Recv( num_generators, 60*60, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status );
+     int proc = status.MPI_SOURCE;
      for( int i = 0; i < 60; i++ )
-       for( int j = 0; j < 60; j++ ) {
-	 long long buffer[num_generators[i][j]];
-	 MPI_Recv( buffer, num_generators[i][j], MPI_LONG_LONG_INT, proc, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
-	 generators[i][j]->resize(generators[i][j]->size()+num_generators[i][j]);
-	 for( int k = 0; k < num_generators[i][j]; k++ )
-	   generators[i][j]->push_back(buffer[k]);	 
-       }
+       for( int j = 0; j < 60; j++ )
+	 if( num_generators[i*60+j] ) {
+	   long long buffer[num_generators[i*60+j]];
+	   MPI_Recv( buffer, num_generators[i*60+j], MPI_LONG_LONG_INT, proc, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
+	   generators[i][j]->reserve(generators[i][j]->size()+num_generators[i*60+j]);
+	   for( int k = 0; k < num_generators[i*60+j]; k++ ) {
+	     generators[i][j]->push_back(buffer[k]);	 
+	   }
+	 }
      MPI_Send( &permnum, 1, MPI_LONG_LONG_INT, proc, 2, MPI_COMM_WORLD );
    }
  } else {
@@ -283,15 +281,18 @@ int main(int argc, char *argv[]){
        istack[i] = 0;
      for( int i = 0; i < gridsize; i++ )
        taken[i] = 0;
+     for( int i = 0; i < min_depth; i++ )
+       taken[g[i]] = 1;
      int depth = min_depth; // this is the index of g we are working on
      int AGrading = AShift;
+     for( int i = 0; i < min_depth; i++ )
+	 AGrading -= WN[i][g[i]];
      
      while( true ) {
        if ( depth == gridsize ) { // we are at the end of the recursion, use the permutation
 	 if (AGrading >= amin && AGrading <= amax) {
 	   int MGrading = MaslovGrading(g);
 	   generators[AGrading+30][MGrading+30]->push_back(getIndex(g));
-	   NumGenByAGrading[AGrading+30]++;
 	 }
 	 depth--;
 	 if( depth < min_depth )
@@ -340,34 +341,31 @@ int main(int argc, char *argv[]){
        
      }
      // Request more to do, send back results, then clear generators
-     int num_generators[60][60];
+     int num_generators[60*60];
      for( int i = 0; i < 60; i++ )
        for( int j = 0; j < 60; j++ )
-	 num_generators[i][j] = generators[i][j]->size();
+	 num_generators[i*60+j] = generators[i][j]->size();
      MPI_Send( num_generators, 60*60, MPI_INT, 0, 0, MPI_COMM_WORLD );
      for( int i = 0; i < 60; i++ )
        for( int j = 0; j < 60; j++ )
-	 if( num_generators[i][j] ) {
-	   MPI_Send( &(generators[i][j]->front()), num_generators[i][j], MPI_LONG_LONG_INT, 0, 1, MPI_COMM_WORLD );
+	 if( num_generators[i*60+j] ) {
+	   MPI_Send( &(generators[i][j]->front()), num_generators[i*60+j], MPI_LONG_LONG_INT, 0, 1, MPI_COMM_WORLD );
 	   generators[i][j]->clear();
 	 }
-     MPI_Recv( &startPoint, 1, MPI_LONG_LONG_INT, 0, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
-
+     MPI_Recv( &startPoint, 1, MPI_LONG_LONG_INT, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
    }
 
  }
 
+ if( rank == 0 ) {
+   printf("Time to compute all Alexander gradings %ld\n", time(NULL)-agStartTime); 
 
- printf("Time to compute all Alexander gradings %ld\n", time(NULL)-agStartTime); 
-
- for(int i=0;i<60;i++) {
-   if(NumGenByAGrading[i]>0) printf("Number of generators in Alexander grading %d: %d\n", (i-30), NumGenByAGrading[i]);
+   for( int i = 0; i < 60; i++ )
+     for( int j = 0; j < 60; j++ )
+       if (generators[i][j]->size()) {
+	 printf("Alexander grading %d, Maslov grading %d, num generators %lu\n", i-30, j-30, generators[i][j]->size());
+       }
  }
- for( int i = 0; i < 60; i++ )
-   for( int j = 0; j < 60; j++ )
-     if (generators[i][j]->size())
-       printf("Alexander grading %d, Maslov grading %d, num generators %lu\n", i-30, j-30, generators[i][j]->size());
- 
 
  // Just stop here for the moment.
 
