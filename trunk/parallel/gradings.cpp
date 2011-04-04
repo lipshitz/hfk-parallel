@@ -271,8 +271,9 @@ int main(int argc, char *argv[]){
        permnum = -1;
      MPI_Status status;
      // Wait for a thread to ask for more
+     MPI_Recv( num_generators, 0, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status );
+     /* This deals with collecting the data, but let's put that off until after the calculation
      MPI_Recv( num_generators, 60*60, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status );
-     int proc = status.MPI_SOURCE;
      for( int i = 0; i < 60; i++ )
        for( int j = 0; j < 60; j++ )
 	 if( num_generators[i*60+j] ) {
@@ -283,7 +284,8 @@ int main(int argc, char *argv[]){
 	     generators[i][j]->push_back(buffer[k]);	 
 	   }
 	 }
-     MPI_Send( &permnum, 1, MPI_LONG_LONG_INT, proc, 2, MPI_COMM_WORLD );
+     */
+     MPI_Send( &permnum, 1, MPI_LONG_LONG_INT, status.MPI_SOURCE, 2, MPI_COMM_WORLD );
    }
  } else {
    int g[gridsize];
@@ -355,8 +357,8 @@ int main(int argc, char *argv[]){
        }
        
      }
+     /*
      // Request more to do, send back results, then clear generators
-     int num_generators[60*60];
      for( int i = 0; i < 60; i++ )
        for( int j = 0; j < 60; j++ )
 	 num_generators[i*60+j] = generators[i][j]->size();
@@ -367,20 +369,22 @@ int main(int argc, char *argv[]){
 	   MPI_Send( &(generators[i][j]->front()), num_generators[i*60+j], MPI_LONG_LONG_INT, 0, 1, MPI_COMM_WORLD );
 	   generators[i][j]->clear();
 	 }
+     */
+     // Just request and receive more
+     MPI_Send( num_generators, 0, MPI_INT, 0, 0, MPI_COMM_WORLD );
      MPI_Recv( &startPoint, 1, MPI_LONG_LONG_INT, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
    }
 
  }
 
- if( rank == 0 ) {
+ if( rank == 0 )
    printf("Time to compute all gradings %f\n", read_timer()-agStartTime); 
-   if( !justTime ) {
-     for( int i = 0; i < 60; i++ )
-       for( int j = 0; j < 60; j++ )
-	 if (generators[i][j]->size()) {
-	   printf("Alexander grading %d, Maslov grading %d, num generators %lu\n", i-30, j-30, generators[i][j]->size());
-	 }
-   }
+ if( !justTime ) {
+   for( int i = 0; i < 60; i++ )
+     for( int j = 0; j < 60; j++ )
+       if (generators[i][j]->size()) {
+	 printf("Alexander grading %d, Maslov grading %d, rank %d, num generators %lu\n", i-30, j-30, rank, generators[i][j]->size());
+       }
  }
 
  // Just stop here for the moment.
