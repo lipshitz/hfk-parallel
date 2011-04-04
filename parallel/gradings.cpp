@@ -1,4 +1,4 @@
-#include <time.h>
+#include <sys/time.h>
 #include <iostream>
 #include <stdlib.h>
 #include "mpi.h"
@@ -36,6 +36,20 @@ char *read_string( int argc, char **argv, const char *option, char *default_valu
     if( iplace >= 0 && iplace < argc-1 )
         return argv[iplace+1];
     return default_value;
+}
+
+double read_timer( )
+{
+    static bool initialized = false;
+    static struct timeval start;
+    struct timeval end;
+    if( !initialized )
+    {
+        gettimeofday( &start, NULL );
+        initialized = true;
+    }
+    gettimeofday( &end, NULL );
+    return (end.tv_sec - start.tv_sec) + 1.0e-6 * (end.tv_usec - start.tv_usec);
 }
 
 // Globals
@@ -113,6 +127,7 @@ int main(int argc, char *argv[]){
  
  char *knotFile = read_string( argc, argv, "-k", NULL );
  bool printMatrices = read_int( argc, argv, "-p", 0 );
+ bool justTime = read_int( argc, argv, "-t", 0 );
  if( knotFile ) {
    FILE *f = fopen(knotFile, "r");
    if( !f ) {
@@ -141,13 +156,13 @@ int main(int argc, char *argv[]){
  int amax=20;
 
  int  numcomp = NumComp();
- if( rank == 0 )
+ if( rank == 0 && !justTime )
    printf("Number of components: %d\n", numcomp);
 
  if( rank == 0 )
    if(!ValidGrid()) {printf("Invalid grid!!\n"); return 0;} // Check that the grid is valid
  if( rank == 0 )
-   time_t starttime = time(NULL); // Used to record how long this takes
+   double starttime = read_timer(); // Used to record how long this takes
 
  // Record winding numbers around grid points for Alexander grading computations
  // Also record the Alexander grading shift
@@ -184,7 +199,7 @@ int main(int argc, char *argv[]){
  
  const int AShift = (temp - 4 * gridsize + 4)/8;
  
- if( rank == 0 ) {
+ if( rank == 0 && !justTime ) {
    printf("Alexander Grading Shift: %d\n", AShift);
    printf("Matrix of winding numbers and Black/White grid:\n");
    for(int y=gridsize-1; y>=0; y--) {
@@ -204,7 +219,7 @@ int main(int argc, char *argv[]){
 
  // Record for later use whether every possible rectangle has a black or white dot in it
  // This will speed boundary computations.
- if( rank == 0 )
+ if( rank == 0 && !justTime )
    printf("Computing which rectangles on the torus have no black or white dots inside.\n");
  bool Rectangles[gridsize][gridsize][gridsize][gridsize][4];
  for(int xll=0; xll < gridsize; xll++) {
@@ -239,9 +254,9 @@ int main(int argc, char *argv[]){
    for( int j = 0; j < 60; j++ )
      generators[i][j] = new std::vector<long long>();
  
- if( rank == 0 )
+ if( rank == 0 && !justTime )
    printf("Searching through %lld generators to compute Alexander gradings...\n", Factorial[gridsize]);
- time_t agStartTime = time(NULL);
+ double agStartTime = read_timer();
 
  const int min_depth = 2; // This is the depth from which the master hands out packets
  int num_generators[60*60];
@@ -358,13 +373,14 @@ int main(int argc, char *argv[]){
  }
 
  if( rank == 0 ) {
-   printf("Time to compute all Alexander gradings %ld\n", time(NULL)-agStartTime); 
-
-   for( int i = 0; i < 60; i++ )
-     for( int j = 0; j < 60; j++ )
-       if (generators[i][j]->size()) {
-	 printf("Alexander grading %d, Maslov grading %d, num generators %lu\n", i-30, j-30, generators[i][j]->size());
-       }
+   printf("Time to compute all gradings %f\n", read_timer()-agStartTime); 
+   if( !justTime ) {
+     for( int i = 0; i < 60; i++ )
+       for( int j = 0; j < 60; j++ )
+	 if (generators[i][j]->size()) {
+	   printf("Alexander grading %d, Maslov grading %d, num generators %lu\n", i-30, j-30, generators[i][j]->size());
+	 }
+   }
  }
 
  // Just stop here for the moment.
