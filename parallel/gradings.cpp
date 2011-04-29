@@ -54,60 +54,21 @@ double read_timer( )
 
 // Globals
 
-//const int gridsize = 12; // arc-index
-//const int gridsize = 12;
-
 int gridsize = 12; // arc-index
 int *white;
 int *black;
 int default_white[12] = {9,5,11,7,8,1,10,4,0,3,2,6};
 int default_black[12] = {1,0,4,3,2,6,5,9,8,11,7,10};
-// Trefoil
-//int white[5] = {1, 2, 3, 4, 0};
-//int black[5] = {4, 0, 1, 2, 3};
 
-//int white[10] = {8,7,6,5,4,3,2,9,1,0};
-//int black[10] = {1,3,9,0,7,5,8,4,6,2};
-
-// Kinoshita-Terasaka KT_{2,1}
-//int white[11]={5,10,9,4,8,0,1,6,7,2,3};
-//int black[11]={0,6,1,7,10,2,5,9,3,4,8};
-
-
-
-// Don't waste time computing factorials.  Look them up.
 // Fill in the big ones later since g++ doesn't seem to like big constants
 long long Factorial[16] = {
   1,1,2,6,24,120,720,5040,40320,362880,3628800,39916800,479001600,
   0,0,0};
 
-//braid: (xy)^{-5}
-//int white[10] = {7,6,5,3,4,1,2,0,9,8};
-//int black[10] = {0,9,8,6,7,4,5,3,2,1};
-
-//another braid
-//int white[11] = {5,2,3,1,4,6,7,8,9,0};
-//int black[11] = {1,9,0,5,2,3,4,6,7,8};
-
-//int white[2] = {0,1};
-//int black[2] = {1,0};
-
-// Function Prototypes
-
 void getPerm( long long n, int *P);
 void NextPerm(short counter[], int h[]);
-bool RectDotFree(int xll, int yll, int xur, int yur, int which); 
 inline int max( int a, int b ) { return a > b ? a : b; }
 inline int min( int a, int b ) { return a < b ? a : b; }
-// Decides whether one of the four rectangles on the torus with corners at(xll,yll) and (xur,yur) contains no white or black dots
-/*
- 1 | 2 | 1
----+---+---
- 3 | 0 | 3
----+---+---
- 1 | 2 | 1 
-
-*/
 long long getIndex( int *P);
 int WindingNumber(int x, int y); // Return winding number of the knot projection around (x,y)
 int MaslovGrading(int y []);
@@ -124,10 +85,17 @@ int main(int argc, char *argv[]){
  MPI_Init( &argc, &argv );
  MPI_Comm_size( MPI_COMM_WORLD, &n_proc );
  MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+
+ if( n_proc <= 1 ) {
+   printf("Run this with at least 2 threads\n");
+   MPI_Finalize();
+   exit(0);
+ }
  
  char *knotFile = read_string( argc, argv, "-k", NULL );
  bool printMatrices = read_int( argc, argv, "-p", 0 );
  bool justTime = read_int( argc, argv, "-t", 0 );
+ char *saveDir = read_string( argc, argv, "-o", NULL );
  if( knotFile ) {
    FILE *f = fopen(knotFile, "r");
    if( !f ) {
@@ -216,24 +184,6 @@ int main(int argc, char *argv[]){
      printf("\n");
    }
  } 
-
- // Record for later use whether every possible rectangle has a black or white dot in it
- // This will speed boundary computations.
- if( rank == 0 && !justTime )
-   printf("Computing which rectangles on the torus have no black or white dots inside.\n");
- bool Rectangles[gridsize][gridsize][gridsize][gridsize][4];
- for(int xll=0; xll < gridsize; xll++) {
-  for(int xur=xll+1; xur < gridsize; xur++) {
-   for(int yll=0; yll < gridsize; yll++) {
-    for(int yur=yll+1; yur < gridsize; yur++) {
-     Rectangles[xll][yll][xur][yur][0] = RectDotFree(xll,yll,xur,yur,0);
-     Rectangles[xll][yll][xur][yur][1] = RectDotFree(xll,yll,xur,yur,1);
-     Rectangles[xll][yll][xur][yur][2] = RectDotFree(xll,yll,xur,yur,2);
-     Rectangles[xll][yll][xur][yur][3] = RectDotFree(xll,yll,xur,yur,3);     
-    }
-   }
-  }
- }
 
  // Iterate through the generators in lexicographic
  // order and calculate their boundaries
@@ -379,16 +329,49 @@ int main(int argc, char *argv[]){
 
  if( rank == 0 )
    printf("Time to compute all gradings %f\n", read_timer()-agStartTime); 
- if( !justTime ) {
+
+#define NGEN 5
+#define GEN 6
+ // Gather all the results to the root node and save
+ if( saveDir ) {
    for( int i = 0; i < 60; i++ )
-     for( int j = 0; j < 60; j++ )
-       if (generators[i][j]->size()) {
-	 printf("Alexander grading %d, Maslov grading %d, rank %d, num generators %lu\n", i-30, j-30, rank, generators[i][j]->size());
+     for( int j = 0; j < 60; j++ ) {
+       if( rank != 0 ) {
+	 int num_generators = generators[i][j]->size();
+	 MPI_Send( &num_generators, 1, MPI_INT, 0, NGEN, MPI_COMM_WORLD );
+	 if( num_generators ) {
+	   MPI_Send( &(generators[i][j]->front()), num_generators, MPI_LONG_LONG_INT, 0, GEN, MPI_COMM_WORLD );
+	   generators[i][j]->clear();
+	 }
+       } else {
+	 vector<long long> gens;
+	 for( int k = 1; k < n_proc; k++ ) {
+	   int num_generators;
+	   MPI_Status status;
+	   //printf("(%d %d) waiting to recieve message %d of %d\n", i, j, k, numProcThisMatrix-1);
+	   MPI_Recv( &num_generators, 1, MPI_INT, MPI_ANY_SOURCE, NGEN, MPI_COMM_WORLD, &status );
+	   if( num_generators ) {
+	     gens.reserve(gens.size()+num_generators);
+	     long long buffer[num_generators];
+	     MPI_Recv( buffer, num_generators, MPI_LONG_LONG_INT, status.MPI_SOURCE, GEN, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
+	     for( int k = 0; k < num_generators; k++ ) {
+	       gens.push_back(buffer[k]);	 
+	     }
+	   }
+	 }
+	 std::sort(gens.begin(), gens.end());
+	 if( gens.size() ) {
+	   char outFile[30];
+	   sprintf(outFile, "%s/gen%d,%d.dat", saveDir, i, j);
+	   FILE *f = fopen( outFile, "w" );
+	   fprintf(f, "%lu\n", gens.size());
+	   for( int k = 0; k < gens.size(); k++ )
+	     fprintf(f, "%lld\n", gens[k]);
+	   fclose(f);
+	 }
        }
+     }
  }
-
- // Just stop here for the moment.
-
  /*
  // Calculate the homology groups
  for( int I = 0; I < 60; I++ )
@@ -941,45 +924,6 @@ int MaslovGrading(int y []) {
   }
  }
  return (P/4);
-}
-
-bool RectDotFree(int xll, int yll, int xur, int yur, int which) {
- bool dotfree = 1;
- switch (which) {
-  case 0: 
-   for(int x=xll; x<xur && dotfree; x++) {
-    if (white[x] >= yll && white[x] < yur) dotfree = 0;
-    if (black[x] >= yll && black[x] < yur) dotfree = 0;
-   }
-   return dotfree;
-  case 1:
-   for(int x=0; x<xll && dotfree; x++) {
-    if (white[x] < yll || white[x] >= yur) dotfree = 0;
-    if (black[x] < yll || black[x] >= yur) dotfree = 0;
-   }
-   for(int x=xur; x<gridsize && dotfree; x++) {
-    if (white[x] < yll || white[x] >= yur) dotfree = 0;
-    if (black[x] < yll || black[x] >= yur) dotfree = 0;
-   }
-   return dotfree;
-  case 2:
-   for(int x=xll; x<xur && dotfree; x++) {
-    if (white[x] < yll || white[x] >= yur) dotfree = 0;
-    if (black[x] < yll || black[x] >= yur) dotfree = 0;
-   }
-   return dotfree;
-  case 3:
-   for(int x=0; x<xll && dotfree; x++) {
-    if (white[x] >= yll && white[x] < yur) dotfree = 0;
-    if (black[x] >= yll && black[x] < yur) dotfree = 0;
-   }
-   for(int x=xur; x<gridsize && dotfree; x++) {
-    if (white[x] >= yll && white[x] < yur) dotfree = 0;
-    if (black[x] >= yll && black[x] < yur) dotfree = 0;
-   }
-   return dotfree;
- }
- return 0; //Error!
 }
 
 bool ValidGrid() {
