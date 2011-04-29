@@ -7,6 +7,7 @@
 #include <vector>
 #include <queue>
 #include <list>
+#include <assert.h>
 #include <algorithm>
 #include "matrix-z2z3.h"
 #include "reduction-functions.h"
@@ -475,7 +476,8 @@ int main(int argc, char *argv[]){
      int numProcThisMatrix = n_proc;
      MPI_Comm CommunicatorIJ;
      MPI_Comm_dup(MPI_COMM_WORLD, &CommunicatorIJ);
-     
+     //MPI_Comm CommunicatorIJ = MPI_COMM_WORLD;
+
      int num_generators = generators[i][j]->size();
      delete rows;
      rows = cols;
@@ -621,36 +623,10 @@ int main(int argc, char *argv[]){
      }
      printf("(%d) Matrices filled %d %d\n", rank, i-30, j-30);
 
-     /*
+     // this skips over the first matrix in 10_125
+     //if( i == 30 && j == 26 )
+     //  continue;
 
-     printf("(%d) Loading a test matrix\n", rank);
-     char f[20];
-     sprintf(f, "inmat%d.dat", rank);
-     FILE *file = fopen(f, "r");
-     int testR;
-     int testC;
-     fscanf(file, "%d %d\n", &testR, &testC);
-     firstCol = testC*rank;
-     numCols = testC;
-     GraphOut = *(new vector<Generator>(testC));
-     GraphIn = *(new vector<Generator>(testR));
-     for( int r = 0; r < testR; r++ ) {
-       for( int c = 0; c < testC; c++ ) {
-	 int b;
-	 fscanf(file, "%d ", &b);
-	 if( b ) {
-	   GraphOut[c].ones.push_back(r);
-	   GraphIn[r].ones.push_back(c+firstCol);
-	   printf("(%d) one at %d %d\n", rank, r, c);
-	 }
-       }
-       fscanf(file, "\n");
-     }
-
-     displayMatrix(GraphOut, GraphIn, testR, testC, rank, firstCol);
-     */
-     //MPI_Finalize();
-     //exit(0);
      /* Now do the reduction.  Algorithm is:
 	 Each proc stores 'turn' which says from whom it next expects to recieve a column to subtract from its matrix (below where it is)
 	 Asynchronously wait to recieve a column from processor 'turn', on recepit.  Send that column on to the next processor (unless it came from them), immediatly subtract from my current top column (if appropriate), then enqueue for future processing.  increment 'turn'.  If it is now our turn, enqueue our top column and send it to the next processor.  Take a new top column, subtract everything in queue from it (if it has a 1 where the column in queue has its first 1).
@@ -668,22 +644,22 @@ int main(int argc, char *argv[]){
      bool waitingForCol = false;
      int waitingSource = -1; // the processor from which we are currently waiting
      bool colOfMineOnStack = false; // we don't want to ever have multiple columns of our own on the stack (it means the one we are about to add hasn't been reduced sufficiently yet)
-     //int emptyCol[2];
-     //emptyCol[0] = rank;
-     //emptyCol[1] = 0;
-     MPI_Request *inRequest;
-     MPI_Request *finishedInRequest;
-     int nothing = 0;
-     finishedInRequest = new MPI_Request();
-     MPI_Irecv( &nothing, 1, MPI_INT, MPI_ANY_SOURCE, TAG_FINISHED, CommunicatorIJ, finishedInRequest );
-     int inSize;
-     int *inCol=0;
      int nextProc = rank + 1;
      if( nextProc == numProcThisMatrix+firstProcThisMatrix )
        nextProc = firstProcThisMatrix;
      int prevProc = rank - 1;
      if( prevProc < firstProcThisMatrix )
        prevProc = firstProcThisMatrix + numProcThisMatrix - 1;
+     MPI_Request *inRequest;
+     MPI_Request *finishedInRequest;
+     MPI_Request *finishedOutRequest;
+     int finishedOutSignal[2];
+     int finishedInSignal[2];
+     finishedInRequest = new MPI_Request();
+     finishedOutRequest = NULL;
+     MPI_Irecv( finishedInSignal, 2, MPI_INT, prevProc, TAG_FINISHED, CommunicatorIJ, finishedInRequest );
+     int inSize;
+     int *inCol=0;
      //bool starting = true;
      list<int>::iterator indexInCol;
      list<int>::iterator indexInColEndValue = indexInCol;
@@ -691,27 +667,67 @@ int main(int argc, char *argv[]){
      MPI_Request *currentColOutRequest;
      int c = 0;
      int numProcReportingFinished = 0;
+     int procsReportingFinished[numProcThisMatrix]; // this stores the globalTurn at which each proc has reported it is finished, or -1 if it has not reported finished
+     for( int p = 0; p < numProcThisMatrix; p++ )
+       procsReportingFinished[p] = -1;
      bool selfFinished = false;
      int zero = 0;
 
-     while( numProcReportingFinished < numProcThisMatrix ) { // main loop for the reduction.  The key principle is that we only do one thing per loop iteration
-       
-       // check if we have received a notification that another processor is done
-       // but only check if not everyone else is done
-       if( numProcReportingFinished < numProcThisMatrix-1 ||
-	   numProcReportingFinished == numProcThisMatrix-1 && selfFinished ) {
-	 int someoneDone = 0;
-	 MPI_Status stat;
-	 MPI_Test( finishedInRequest, &someoneDone, &stat );
-	 if( someoneDone ) {
-	   int dP = stat.MPI_SOURCE;
-	   numProcReportingFinished++;
+     //while( numProcReportingFinished < numProcThisMatrix ) { // main loop for the reduction.  The key principle is that we only do one thing per loop iteration
+     while ( true ) {
+       bool allDone = true;
+       for( int p = 0; p < numProcThisMatrix; p++ )
+	 if( procsReportingFinished[p] == -1 || procsReportingFinished[p] > globalTurn ) {
+	   allDone = false;
+	   break;
+	 }
+       if( allDone )
+	 break;
+       // make sure turn is someone who is actually still working
+       while( procsReportingFinished[turn-firstProcThisMatrix] != -1 && procsReportingFinished[turn-firstProcThisMatrix] <= globalTurn ) {
+	 increment(turn, firstProcThisMatrix, numProcThisMatrix);
+	 globalTurn++;
+       }
+       //printf("(%d) in reduction, c = %d/%d, turn = %d(%d), numfinished = %d, selfFinished = %d(%d), colsToReduceBy.size = %lu, outRequests.size() = %lu, waiting-for-size=%d waiting-for-col=%d, colOfMine = %d\n", rank, c, numCols, turn, globalTurn, numProcReportingFinished, selfFinished, procsReportingFinished[rank], colsToReduceBy.size(), outRequests.size(), waitingForSize, waitingForCol, colOfMineOnStack);
 
-	   // put out a new request if there are any procs left not reporting done
+       // check if we have received a notification that another processor is done
+       if( finishedOutRequest ) {
+	 int outDone = 0;
+	 MPI_Test( finishedOutRequest, &outDone, MPI_STATUS_IGNORE );
+	 if( outDone ) {
+	   delete finishedOutRequest;
+	   finishedOutRequest = NULL;
 	   if( numProcReportingFinished < numProcThisMatrix-1 ||
 	       numProcReportingFinished == numProcThisMatrix-1 && selfFinished ) {
 	     finishedInRequest = new MPI_Request();
-	     MPI_Irecv( &nothing, 1, MPI_INT, MPI_ANY_SOURCE, TAG_FINISHED, CommunicatorIJ, finishedInRequest );
+	     //printf("(%d) prepared to receive another done signal\n", rank);
+	     MPI_Irecv( finishedInSignal, 2, MPI_INT, prevProc, TAG_FINISHED, CommunicatorIJ, finishedInRequest );
+	   }
+	   continue;
+	 }
+       }
+
+       if( finishedInRequest ) {
+	 int someoneDone = 0;
+	 MPI_Test( finishedInRequest, &someoneDone, MPI_STATUS_IGNORE );
+	 if( someoneDone ) {
+	   delete finishedInRequest;
+	   finishedInRequest = NULL;
+	   //printf("(%d) got finished signal from %d (nextProc=%d)\n", rank, finishedInSignal[0], nextProc);
+	   procsReportingFinished[finishedInSignal[0]-firstProcThisMatrix] = finishedInSignal[1];
+	   numProcReportingFinished++;
+	   if( finishedInSignal[0] != nextProc ) {
+	     finishedOutRequest = new MPI_Request();
+	     //printf("(%d) sending on finished signal from %d\n", rank, finishedInSignal[0]);
+	     MPI_Isend( finishedInSignal, 2, MPI_INT, nextProc, TAG_FINISHED, CommunicatorIJ, finishedOutRequest );
+	   } else {
+	   // put out a new request if there are any procs left not reporting done
+	     if( numProcReportingFinished < numProcThisMatrix-1 ||
+		 numProcReportingFinished == numProcThisMatrix-1 && selfFinished ) {
+	       finishedInRequest = new MPI_Request();
+	       //printf("(%d) prepared to receive another done signal\n", rank);
+	       MPI_Irecv( &finishedInSignal, 2, MPI_INT, prevProc, TAG_FINISHED, CommunicatorIJ, finishedInRequest );
+	     }	   
 	   }
 	   continue;
 	 }
@@ -719,13 +735,14 @@ int main(int argc, char *argv[]){
        // check if we ourselves are done
        if( !selfFinished && c >= numCols ) {
 	 selfFinished = true;
+	 procsReportingFinished[rank-firstProcThisMatrix] = globalTurn;
 	 numProcReportingFinished++;
-	 // send a message to everyone else
+	 // send a message along the chain
 	 MPI_Request req;
-	 for( int tp = firstProcThisMatrix; tp < firstProcThisMatrix+numProcThisMatrix; tp++ )
-	   if( tp != rank ) {
-	     MPI_Isend( &nothing, 1, MPI_INT, tp, TAG_FINISHED, CommunicatorIJ, &req);
-	   }
+	 //printf("(%d) sending out my done signal\n", rank);
+	 finishedOutSignal[0] = rank;
+	 finishedOutSignal[1] = globalTurn;
+	 MPI_Isend( finishedOutSignal, 2, MPI_INT, nextProc, TAG_FINISHED, CommunicatorIJ, &req);
 	 continue;
        }
 
@@ -737,14 +754,17 @@ int main(int argc, char *argv[]){
 	 waitingForSize = true;
 	 continue;
        }
-
+       
        // check if we are waiting to receive a size (only continue if we actually received something)
        if( waitingForSize ) {
 	 // check if we have received the size, if so toggle waitingForSize, toggle waitingFolCol, issue the issue Irecv for the column
+	 //printf("(%d) Here 1\n", rank);
 	 int ready = 0;
 	 MPI_Status stat;
 	 MPI_Test( inRequest, &ready, &stat );
+	 //printf("(%d) Here 2\n", rank);
 	 if( ready ) {
+	   delete inRequest;
 	   waitingForSize = false;
 	   if( inSize ) {
 	     inCol = (int*) malloc( (inSize+2)*sizeof(int) );
@@ -757,6 +777,11 @@ int main(int argc, char *argv[]){
 	     if( rank < turn )
 	       globalTurn += numProcThisMatrix-firstProcThisMatrix;
 	     turn = rank;
+	     // a special case: if this process is finished, it needs to pass on a zero size so that the calculation can continue
+	     if( selfFinished ) {
+	       MPI_Request req;
+	       MPI_Isend( &zero, 1, MPI_INT, nextProc, TAG_COLUMN_SIZE, CommunicatorIJ, &req);
+	     }
 	   }
 	   continue;
 	 }
@@ -767,6 +792,7 @@ int main(int argc, char *argv[]){
 	 int ready = 0;
 	 MPI_Test( inRequest, &ready, MPI_STATUS_IGNORE );
 	 if( ready ) {
+	   delete inRequest;
 	   for( int e = 2; e < 2+inSize; e++ )
 	     if( inCol[e] >= rows->size() ) {
 	       printf("(%d) FATAL receive error e=%d inCol[e]=%d numRows=%lu (%d %d, %d)\n", rank, e, inCol[e], rows->size(), i, j, c ); 
@@ -783,6 +809,7 @@ int main(int argc, char *argv[]){
 	   globalTurn += inCol[0]-turn;
 	   if( inCol[0] < turn )
 	     globalTurn += numProcThisMatrix-firstProcThisMatrix;
+	   //printf("(%d) received column %d %d %d\n", rank, inCol[0], inCol[1], inCol[2]);
 	   turn = inCol[0]; // this should take care of dropped blank columns
 	   increment(turn, firstProcThisMatrix, numProcThisMatrix);
 	   globalTurn++;
@@ -792,6 +819,7 @@ int main(int argc, char *argv[]){
 	   if( inCol[0] != nextProc ) { // if it is, this column has made it all the way around
 	     MPI_Request request1, *request2;
 	     request2 = new MPI_Request();
+	     //printf("(%d) passing along column %d %d %d\n", rank, inCol[0], inCol[1], inCol[2]);
 	     MPI_Isend( inCol+1, 1, MPI_INT, nextProc, TAG_COLUMN_SIZE, CommunicatorIJ, &request1 ); 
 	     MPI_Isend( colsToReduceBy.back(), inCol[1]+2, MPI_INT, nextProc, TAG_COLUMN, CommunicatorIJ, request2 );
 	     outRequests.push_back(request2);
@@ -808,10 +836,13 @@ int main(int argc, char *argv[]){
        }
 
        if( turn == rank && selfFinished ) {
+	 assert(false);
+	 /*
 	 MPI_Request request1;
 	 MPI_Isend( &zero, 1, MPI_INT, nextProc, TAG_COLUMN_SIZE, CommunicatorIJ, &request1 );
 	 increment(turn, firstProcThisMatrix, numProcThisMatrix);
 	 globalTurn++;
+	 */
        }
 	 
        if( turn == rank && !selfFinished && // it is our turn to send 
@@ -833,7 +864,7 @@ int main(int argc, char *argv[]){
 	     printf("(%d) FATAL error %d %d %lu\n", rank, e, column[e], rows->size() ); 
 	   }
 	 }
-
+	 //printf("(%d) sending column %d %d %d\n", rank, column[0], column[1], column[2]);
 	 increment(turn, firstProcThisMatrix, numProcThisMatrix);
 	 globalTurn++;
 	 // send this column to the next processor 
@@ -851,7 +882,6 @@ int main(int argc, char *argv[]){
 
 	 do {
 	   c++;
-	   // I think the correct thing to do is not to keep track of where to apply each column, but rather to apply all saved columns to c after this incrementation (including the column we are currently working from if it hasn't gotten past c yet)
 	   if( c < numCols && GraphOut[c].ones.size() ) {
 	     // all the columns on the queue
 	     for( std::deque<int*>::iterator it = colsToReduceBy.begin(); it != colsToReduceBy.end(); it++ ) {
@@ -907,7 +937,6 @@ int main(int argc, char *argv[]){
 	   GraphIn[currentCol[2]].ones.clear();
 	   // make sure we have sent on this column before deleting it
 	   MPI_Wait(currentColOutRequest, MPI_STATUS_IGNORE);
-	   
 	   if( currentCol[0] == rank )
 	     colOfMineOnStack = false; // because there could be only one and we just finished with it
 	   
@@ -924,6 +953,7 @@ int main(int argc, char *argv[]){
 	   colsToReduceBy.pop_front();
 	   outRequests.pop_front();
 	   MPI_Wait(currentColOutRequest, MPI_STATUS_IGNORE);
+	   delete currentColOutRequest;
 	   free(currentCol);
 	 }
 	 continue;
@@ -945,6 +975,14 @@ int main(int argc, char *argv[]){
      for( int col = 0; col < numCols; col++ )
        if( GraphOut[col].ones.size() == 0 || !GraphOut[col].alive )
 	 localKD++;
+       else {
+	 /*
+	 printf("(%d) TAG %d:", rank, col+firstCol);
+	 for( list<int>::iterator it = GraphOut[col].ones.begin(); it != GraphOut[col].ones.end(); it++ )
+	   printf("%d ", *it);
+	 printf("\n");
+	 */
+       }
      unsigned int localID = numCols - localKD;
 
      // this would probably be more efficient done at the end with all at once
@@ -952,7 +990,12 @@ int main(int argc, char *argv[]){
      MPI_Reduce( &localID, &imageDimensions[i][j], 1, MPI_UNSIGNED, MPI_SUM, firstProcThisMatrix, CommunicatorIJ );
      if( rank == firstProcThisMatrix )
        printf("(%d) TAG gradings %d %d, %d %d\n", rank, i-30, j-30, kernelDimensions[i][j], imageDimensions[i][j] );
-     
+
+     //if( i == 30 && j == 27 ) {
+     //  MPI_Finalize();
+     //  exit(0);
+     //}
+     MPI_Comm_free(&CommunicatorIJ);
    }
      
      
