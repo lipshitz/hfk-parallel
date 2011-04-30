@@ -279,29 +279,48 @@ int main(int argc, char *argv[]){
 
  int imageDimension, kernelDimension;
 
+ int BLOCKSIZE = 10;
+
  if( cols.size() == 0 || rows.size() == 0 ) {
    imageDimension = 0;
    kernelDimension = cols.size();
  } else {
    // Decide who has ownership of what subset of the generators (without communication).
-   int colsPerProcMin = num_generators/n_proc;
-   int extraCols = num_generators - n_proc * colsPerProcMin;
-   int firstCol, numCols;
-   if( rank < extraCols ) {
-     firstCol = (rank)*(colsPerProcMin+1);
-     numCols = colsPerProcMin+1;
+   // The division will be block cyclic, with size set by BLOCKSIZE
+   int blocksPerProcMin = num_generators/BLOCKSIZE/n_proc;
+   int extraBlocks = (num_generators - n_proc * blocksPerProcMin * BLOCKSIZE)/BLOCKSIZE;
+   int extraCols = num_generators - n_proc * blocksPerProcMin * BLOCKSIZE - extraBlocks*BLOCKSIZE;
+   int numFullBlocks, tailSize, numBlocks; // the number of complete blocks, the size of the last block (usually zero), and the total number of blocks including that one
+   if( rank < extraBlocks ) {
+     numFullBlocks = blocksPerProcMin+1;
+     tailSize = 0;
+   } else if( rank == extraBlocks ) {
+     numFullBlocks = blocksPerProcMin;
+     tailSize = extraCols;
    } else {
-     firstCol = extraCols + (rank)*colsPerProcMin;
-     numCols = colsPerProcMin;
+     numFullBlocks = blocksPerProcMin;
+     tailSize = 0;
    }
-   printf("(%d) ownership determined, my block is %lu %d starting at %d\n", rank, rows.size(), numCols, firstCol);
-   //printf("Here %d %d %d\n", i, j, rank);
+   if( tailSize )
+     numBlocks = numFullBlocks+1;
+   else
+     numBlocks = numFullBlocks;
+   int numCols = numFullBlocks*BLOCKSIZE + tailSize;
+   
+   printf("(%d) ownership determined, I have %d blocks of size %d and %d extra columns at the end for a total of %d columns\n", rank, numFullBlocks, BLOCKSIZE, tailSize, numCols);
+
    // Each proc calculates the part of the matrix that it owns, storing both rows and columns as in the serial code.  It holds entire columns, but only certain rows
    vector<Generator> GraphIn( rows.size() ); // Will hold boundary data.
    vector<Generator> GraphOut( numCols ); // Will hold boundary data.
    //printf("Filling %d %d\n", I, J);
+   int globalIndex = BLOCKSIZE*rank-BLOCKSIZE*(n_proc-1)-1;
    for(int index=0; index < numCols; index++) {
-     getPerm(cols[firstCol+index],g);
+     // update globalIndex
+     if( index % BLOCKSIZE == 0 )
+       globalIndex += BLOCKSIZE*(n_proc-1);
+     globalIndex++;
+     //printf("(%d) li=%d gi=%d\n", rank, index, globalIndex);
+     getPerm(cols[globalIndex],g);
      bool firstrect, secondrect;
      for(int i=0; i<gridsize; i++) {
        for(int j=i+1; j<gridsize; j++) {
@@ -355,7 +374,8 @@ int main(int argc, char *argv[]){
 	   // This is, of course, wrong
 #else
 	   GraphOut[index].ones.push_back( indexgij );
-	   GraphIn[indexgij].ones.push_back( index );
+	   GraphIn[indexgij].ones.push_back(index);
+	   //printf("filling entry %d %d\n", globalIndex+1, indexgij+1);
 #endif
 	 }
        }
@@ -363,18 +383,17 @@ int main(int argc, char *argv[]){
    }
    printf("(%d) Matrix filled\n", rank);
 
-   //char fileName[10];
-   //sprintf(fileName, "coutmat%d", rank); 
-   //printMatrix(fileName, GraphOut);
-   
+   char fileName[10];
+   sprintf(fileName, "outmat%d", rank); 
+   printMatrix(fileName, GraphOut);
+
    // this skips over the first matrix in 10_125
    //if( i == 30 && j == 26 )
    //  continue;
    
-   /* Now do the reduction.  Algorithm is:
-      Each proc stores 'turn' which says from whom it next expects to recieve a column to subtract from its matrix (below where it is)
-      Asynchronously wait to recieve a column from processor 'turn', on recepit.  Send that column on to the next processor (unless it came from them), immediatly subtract from my current top column (if appropriate), then enqueue for future processing.  increment 'turn'.  If it is now our turn, enqueue our top column and send it to the next processor.  Take a new top column, subtract everything in queue from it (if it has a 1 where the column in queue has its first 1).
-      Meanwhile, while not receiving anything, take the first column off the queue and subtract it from all of our columns that have weight at its pivot
+   /* 
+      Unlike previous versions, send a block at a time.  The format of a message is: <origProc> <col1Size> <col1Entry1> ... <col1lastEntry> <col2size> ...
+      Everything below this line needs to be updated
    */
 #define TAG_COLUMN_SIZE 10
 #define TAG_COLUMN 11
@@ -402,14 +421,18 @@ int main(int argc, char *argv[]){
    finishedInRequest = new MPI_Request();
    finishedOutRequest = NULL;
    MPI_Irecv( finishedInSignal, 2, MPI_INT, prevProc, TAG_FINISHED, MPI_COMM_WORLD, finishedInRequest );
-   int inSize;
-   int *inCol=0;
    //bool starting = true;
-   list<int>::iterator indexInCol;
-   list<int>::iterator indexInColEndValue = indexInCol;
+   int indexInCol=-1;
+   int colInCol;
    int *currentCol;
    MPI_Request *currentColOutRequest;
-   int c = 0;
+   int emptyCol[2];
+   emptyCol[0] = rank;
+   emptyCol[1] = 0;
+   int block = 0;
+   int currentBlockSize = BLOCKSIZE;
+   if( numFullBlocks == 0 )
+     currentBlockSize = tailSize;
    int numProcReportingFinished = 0;
    int procsReportingFinished[n_proc]; // this stores the globalTurn at which each proc has reported it is finished, or -1 if it has not reported finished
    for( int p = 0; p < n_proc; p++ )
@@ -424,8 +447,8 @@ int main(int argc, char *argv[]){
        increment(turn, 0, n_proc);
        globalTurn++;
      }
-     //printf("(%d) in reduction, c = %d/%d, turn = %d(%d), numfinished = %d, selfFinished = %d(%d), colsToReduceBy.size = %lu, outRequests.size() = %lu, waiting-for-size=%d waiting-for-col=%d, colOfMine = %d\n", rank, c, numCols, turn, globalTurn, numProcReportingFinished, selfFinished, procsReportingFinished[rank], colsToReduceBy.size(), outRequests.size(), waitingForSize, waitingForCol, colOfMineOnStack);
-     
+     //printf("(%d) in reduction, block = %d/%d, turn = %d(%d), numfinished = %d, selfFinished = %d(%d), colsToReduceBy.size = %lu, outRequests.size() = %lu, colOfMine = %d\n", rank, block, numBlocks, turn, globalTurn, numProcReportingFinished, selfFinished, procsReportingFinished[rank], colsToReduceBy.size(), outRequests.size(), colOfMineOnStack);
+
      // check if we have received a notification that another processor is done
      if( finishedOutRequest ) {
        int outDone = 0;
@@ -449,19 +472,16 @@ int main(int argc, char *argv[]){
        if( someoneDone ) {
 	 delete finishedInRequest;
 	 finishedInRequest = NULL;
-	 //printf("(%d) got finished signal from %d (nextProc=%d)\n", rank, finishedInSignal[0], nextProc);
 	 procsReportingFinished[finishedInSignal[0]] = finishedInSignal[1];
 	 numProcReportingFinished++;
 	 if( finishedInSignal[0] != nextProc ) {
 	   finishedOutRequest = new MPI_Request();
-	   //printf("(%d) sending on finished signal from %d\n", rank, finishedInSignal[0]);
 	   MPI_Isend( finishedInSignal, 2, MPI_INT, nextProc, TAG_FINISHED, MPI_COMM_WORLD, finishedOutRequest );
 	 } else {
 	   // put out a new request if there are any procs left not reporting done
 	   if( numProcReportingFinished < n_proc-1 ||
 	       numProcReportingFinished == n_proc-1 && selfFinished ) {
 	     finishedInRequest = new MPI_Request();
-	     //printf("(%d) prepared to receive another done signal\n", rank);
 	     MPI_Irecv( &finishedInSignal, 2, MPI_INT, prevProc, TAG_FINISHED, MPI_COMM_WORLD, finishedInRequest );
 	   }	   
 	 }
@@ -469,7 +489,7 @@ int main(int argc, char *argv[]){
        }
      }
      // check if we ourselves are done
-     if( !selfFinished && c >= numCols ) {
+     if( !selfFinished && (block >= numBlocks) ) {
        selfFinished = true;
        procsReportingFinished[rank] = globalTurn;
        numProcReportingFinished++;
@@ -482,95 +502,56 @@ int main(int argc, char *argv[]){
        continue;
      }
      
-     // check if we should prepare to receive
-     if( turn != rank && !waitingForSize && !waitingForCol ) {
-       inRequest = new MPI_Request();
-       MPI_Irecv( &inSize, 1, MPI_INT, prevProc, TAG_COLUMN_SIZE, MPI_COMM_WORLD, inRequest );
-       waitingSource = turn;
-       waitingForSize = true;
-       continue;
-     }
-     
-     // check if we are waiting to receive a size (only continue if we actually received something)
-     if( waitingForSize ) {
-       // check if we have received the size, if so toggle waitingForSize, toggle waitingFolCol, issue the issue Irecv for the column
-       //printf("(%d) Here 1\n", rank);
-       int ready = 0;
+     // if it is not our turn, see if there is a message to pick up
+     if( turn != rank ) {
        MPI_Status stat;
-       MPI_Test( inRequest, &ready, &stat );
-       //printf("(%d) Here 2\n", rank);
-       if( ready ) {
-	 delete inRequest;
-	 waitingForSize = false;
-	 if( inSize ) {
-	   inCol = (int*) malloc( (inSize+2)*sizeof(int) );
-	   inRequest = new MPI_Request();
-	   MPI_Irecv( inCol, inSize+2, MPI_INT, prevProc, TAG_COLUMN, MPI_COMM_WORLD, inRequest );
-	   waitingForCol = true;
-	 } else {
-	   waitingSource = -1;
-	   globalTurn += rank-turn;
-	   if( rank < turn )
-	     globalTurn += n_proc;
-	   turn = rank;
-	   // a special case: if this process is finished, it needs to pass on a zero size so that the calculation can continue
-	   if( selfFinished ) {
-	     MPI_Request req;
-	     MPI_Isend( &zero, 1, MPI_INT, nextProc, TAG_COLUMN_SIZE, MPI_COMM_WORLD, &req);
-	   }
-	 }
-	 continue;
-       }
-     }
-     
-     // check if we are waiting to receive a column (only continue if we actually receive one)
-     if( waitingForCol ) {
-       int ready = 0;
-       MPI_Test( inRequest, &ready, MPI_STATUS_IGNORE );
-       if( ready ) {
-	 delete inRequest;
-	 for( int e = 2; e < 2+inSize; e++ )
-	   if( inCol[e] >= rows.size() ) {
-	     printf("(%d) FATAL receive error e=%d inCol[e]=%d numRows=%lu (%d)\n", rank, e, inCol[e], rows.size(), c ); 
-	     printf("(%d) FATAL ", rank);
-	     for( int f = 0; f < 2+inSize; f++ )
-	       printf("%d ", inCol[f]);
-	     printf("\n");
-	     exit(0);
-	   }
-	 
-	 waitingForCol = false;
-	 waitingSource = -1;
-	 colsToReduceBy.push_back(inCol);
-	 globalTurn += inCol[0]-turn;
-	 if( inCol[0] < turn )
+       int flag;
+       MPI_Iprobe( prevProc, TAG_COLUMN, MPI_COMM_WORLD, &flag, &stat);
+       if( flag ) {
+	 int inSize;
+	 MPI_Get_count(&stat, MPI_INT, &inSize);
+	 int *inCols;
+	 inCols = (int*) malloc( inSize*sizeof(int) );
+	 MPI_Recv( inCols, inSize, MPI_INT, prevProc, TAG_COLUMN, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
+	 /*
+	 printf("(%d) received a block: ", rank);
+	 for( int l = 0; l < inSize; l++ )
+	   printf("%d ", inCols[l]);
+	 printf("\n");
+	 printf("(%d) received while block*BLOCKSIZE=%d\n", rank, block*BLOCKSIZE);
+	 */
+	 globalTurn += inCols[0] - turn;
+	 if( inCols[0] < turn )
 	   globalTurn += n_proc;
-	 //printf("(%d) received column %d %d %d\n", rank, inCol[0], inCol[1], inCol[2]);
-	 turn = inCol[0]; // this should take care of dropped blank columns
+	 turn = inCols[0];
 	 increment(turn, 0, n_proc);
 	 globalTurn++;
-	 if( inCol[1] == 0 ) {
-	   printf("(%d) Warning: just received a column of zero size, size should have been %d\n", rank, inSize);
+
+	 if( inCols[1] ) { // the new columns are not zero, add it to the queue
+	   colsToReduceBy.push_back(inCols);
+	   if( inCols[0] != nextProc ) { //pass on, unless it has made it all the way around
+	     MPI_Request *outReq;
+	     outReq = new MPI_Request();
+	     MPI_Isend( colsToReduceBy.back(), inSize, MPI_INT, nextProc, TAG_COLUMN, MPI_COMM_WORLD, outReq );
+	     outRequests.push_back(outReq);
+	   } else {
+	     // need to keep outRequests in sync with colsToReduceBy
+	     MPI_Request rnull = MPI_REQUEST_NULL;
+	     outRequests.push_back(&rnull);
+	   }
+	   
+	   if( !selfFinished ) {
+	     // resolve the newly received columns with our next set
+	     int colStartIndex = 2;
+	     for( int col = 0; col < inCols[1]; col++, colStartIndex += inCols[colStartIndex]+1 )
+	       for( int target = block*BLOCKSIZE; target < block*BLOCKSIZE+currentBlockSize; target++ )
+		 resolveCols(GraphOut, GraphIn, inCols+colStartIndex+1, inCols[colStartIndex], target);
+	   }
 	 }
-	 if( inCol[0] != nextProc ) { // if it is, this column has made it all the way around
-	   MPI_Request request1, *request2;
-	   request2 = new MPI_Request();
-	   //printf("(%d) passing along column %d %d %d\n", rank, inCol[0], inCol[1], inCol[2]);
-	   MPI_Isend( inCol+1, 1, MPI_INT, nextProc, TAG_COLUMN_SIZE, MPI_COMM_WORLD, &request1 ); 
-	   MPI_Isend( colsToReduceBy.back(), inCol[1]+2, MPI_INT, nextProc, TAG_COLUMN, MPI_COMM_WORLD, request2 );
-	   outRequests.push_back(request2);
-	 } else {
-	   // need to keep outRequests in sync with colsToReduceBy
-	   MPI_Request rnull = MPI_REQUEST_NULL;
-	   outRequests.push_back(&rnull);
-	 }
-	 if( c < numCols ) {
-	   resolveCols(GraphOut, GraphIn, inCol+2, inCol[1], c);
-	 }
+
 	 continue;
        }
      }
-     
 
      if( turn == rank && selfFinished ) {
        assert(false);
@@ -581,107 +562,157 @@ int main(int argc, char *argv[]){
 	 globalTurn++;
 	 */
      }
-     
+   
      if( turn == rank && !selfFinished && // it is our turn to send 
 	 !colOfMineOnStack // but only send if we don't already have a column on the stack (perhaps redundant with the next condition
 	 ){
-       int numEntries, *column;
-       
-       // Should we just check if all the columns have been applied at least this far?, perhaps outsize this if statement
-       
-       numEntries = GraphOut[c].ones.size();
-       
-       column = (int*) malloc((numEntries+2)*sizeof(int));
-       column[0] = rank;
-       column[1] = numEntries;
-       int e = 2;
-       for( list<int>::iterator it = GraphOut[c].ones.begin(); e < numEntries+2; e++, it++ ) {
-	 column[e] = *it;
-	 if( column[e] >= rows.size() ) {
-	   printf("(%d) FATAL error %d %d %lu\n", rank, e, column[e], rows.size() ); 
+       // resolve a block of columns with eachother, fully (there is no need to do it fully, unless we are going to have multiple threads work on different ones at once later
+       /*
+       //debug code
+       printf("(%d) about to fully reduce a block starting at %d\n", rank, block*BLOCKSIZE);
+       printf("(%d) starting at: ", rank);
+       for( int source=block*BLOCKSIZE; source < block*BLOCKSIZE+currentBlockSize; source++ ) {
+	 int size = GraphOut[source].ones.size();
+	 if( size ) {
+	   printf("%d ", size);
+	     for( list<int>::iterator it = GraphOut[source].ones.begin(); it != GraphOut[source].ones.end(); it++ )
+	       printf("%d ", *it);
+	   }
+       }
+       printf("\n");
+       // end debug code
+       */
+
+       for( int source = block*BLOCKSIZE; source < block*BLOCKSIZE+currentBlockSize; source++ )
+	 for( int target = block*BLOCKSIZE; target < block*BLOCKSIZE+currentBlockSize; target++ )
+	   if( source != target ) // for full reduction
+	   //if( source < target ) // for partial reduction
+	     resolveColsInternal(GraphOut, GraphIn, source, target);
+       /*
+       //debug code
+       printf("(%d) finished with: ", rank);
+       for( int source=block*BLOCKSIZE; source < block*BLOCKSIZE+currentBlockSize; source++ ) {
+	 int size = GraphOut[source].ones.size();
+	 if( size ) {
+	   printf("%d ", size);
+	     for( list<int>::iterator it = GraphOut[source].ones.begin(); it != GraphOut[source].ones.end(); it++ )
+	       printf("%d ", *it);
+	   }
+       }
+       printf("\n");
+       // end debug code
+       */
+
+       // assemble them to send       
+       int numColumns=0, *columns, totalEntries=0;
+       for( int source = block*BLOCKSIZE; source < block*BLOCKSIZE+currentBlockSize; source++ ) {
+	 int size = GraphOut[source].ones.size();
+	 if( size ) {
+	   totalEntries += size;
+	   numColumns++;
 	 }
        }
-       //printf("(%d) sending column %d %d %d\n", rank, column[0], column[1], column[2]);
+
+       if( numColumns ) { // if the message isn't all zeros
+	 totalEntries += 2 + numColumns; // this is the size of the message
+	 columns = (int*) malloc( totalEntries*sizeof(int) );
+	 columns[0] = rank;
+	 columns[1] = numColumns;
+	 for( int source=block*BLOCKSIZE, e=2; source < block*BLOCKSIZE+currentBlockSize; source++ ) {
+	   int size = GraphOut[source].ones.size();
+	   if( size ) {
+	     columns[e] = size;
+	     e++;
+	     for( list<int>::iterator it = GraphOut[source].ones.begin(); it != GraphOut[source].ones.end(); it++, e++ )
+	       columns[e] = *it;
+	   }
+	 }
+	 
+	 //printf("(%d) sending column %d %d %d\n", rank, column[0], column[1], column[2]);
+	 // send this column to the next processor 
+	 MPI_Request *req;
+	 req = new MPI_Request();
+	 MPI_Isend( columns, totalEntries, MPI_INT, nextProc, TAG_COLUMN, MPI_COMM_WORLD, req );
+	 outRequests.push_back(req); 
+	 colsToReduceBy.push_back(columns);
+	 colOfMineOnStack = true;
+       } else { // just send out the empty message, but don't put in on the queue
+	 MPI_Request req;
+	 MPI_Isend( emptyCol, 2, MPI_INT, nextProc, TAG_COLUMN, MPI_COMM_WORLD, &req );
+       }
        increment(turn, 0, n_proc);
        globalTurn++;
-       // send this column to the next processor 
-       // first send the size
-       MPI_Request request1, *request2;
-       request2 = new MPI_Request();
-       MPI_Isend( column+1, 1, MPI_INT, nextProc, TAG_COLUMN_SIZE, MPI_COMM_WORLD, &request1 );
-       if( numEntries ) {
-	 MPI_Isend( column, numEntries+2, MPI_INT, nextProc, TAG_COLUMN, MPI_COMM_WORLD, request2 );
-	 outRequests.push_back(request2); // shouldn't be a need to save request1
-	 colsToReduceBy.push_back(column);
-	 colOfMineOnStack = true;
-       }
+
+       block++;
+       if( block == numFullBlocks )
+	 currentBlockSize = tailSize;
        
-       
-       do {
-	 c++;
-	 if( c < numCols && GraphOut[c].ones.size() ) {
-	   // all the columns on the queue
-	   for( std::deque<int*>::iterator it = colsToReduceBy.begin(); it != colsToReduceBy.end(); it++ ) {
-	     int *columnFromQueue = *it;
-	     resolveCols(GraphOut, GraphIn, columnFromQueue+2, columnFromQueue[1], c);
-	   }
-	   // also the column we are currently working on
-	   if( indexInCol != indexInColEndValue ) {
-	     // this should just deal with it, whether or not there is anything to resolve
-	     resolveCols(GraphOut, GraphIn, currentCol+2, currentCol[1], c);
-	   }
+       // resolve the new block with all the columns on the queue
+       if( block < numBlocks ) {
+	 for( std::deque<int*>::iterator it = colsToReduceBy.begin(); it != colsToReduceBy.end(); it++ ) {
+	   int *columnsFromQueue = *it;
+	   int colStartIndex = 2;
+	   for( int col = 0; col < columnsFromQueue[1]; col++, colStartIndex += columnsFromQueue[colStartIndex]+1 )
+	     for( int target = block*BLOCKSIZE; target < block*BLOCKSIZE+currentBlockSize; target++ )
+	       resolveCols(GraphOut, GraphIn, columnsFromQueue+colStartIndex+1, columnsFromQueue[colStartIndex], target);
 	 }
-       } while( c < numCols && (!GraphOut[c].alive || GraphOut[c].ones.size()==0) );
-       
+       }
        continue;
-     }
+ }
      
      
-     // do some work on the column we are working on
-     if( indexInCol != indexInColEndValue || colsToReduceBy.size() ) {
-       if( indexInCol == indexInColEndValue ) {
+     // do some work on the columns we are working on
+     if( colsToReduceBy.size() ) {
+       //printf("(%d) beginning work cycle\n", rank);
+       if( indexInCol == -1 ) {
+	 //printf("(%d) getting a new set of columns out of the queue\n", rank);
 	 // pull a new column out of the queue
 	 currentCol = colsToReduceBy.front();
 	 currentColOutRequest = outRequests.front();
-	 colsToReduceBy.pop_front();
-	 outRequests.pop_front();
-	 indexInCol = GraphIn[currentCol[2]].ones.begin();
-	 indexInColEndValue = GraphIn[currentCol[2]].ones.end();
+	 colInCol = 0;
+	 indexInCol = 2; // this is very different from what it used to mean
+	 //printf("(%d) done getting a new set of columns out of the queue\n", rank);
        }
-       const int STEPS_PER_COM = 10; // number of steps to take between communication, unless we finish a column
-       for( int count = 0; count < STEPS_PER_COM; count++, indexInCol++ ) {
-	 if( indexInCol == indexInColEndValue ) {
-	   break;
-	   }
-	 // indexInCol is what was called j in the serial code
-	 if( *indexInCol <= c ) {
+       //printf("(%d) currentCol[0]=%d currentCol[1]=%d\n", rank, currentCol[0], currentCol[1]);
+       for( list<int>::iterator it = GraphIn[currentCol[indexInCol+1]].ones.begin(); it != GraphIn[currentCol[indexInCol+1]].ones.end(); it++ ) {
+	 //printf("(%d) %d %d %lu\n", rank, *it, currentCol[indexInCol+1], GraphIn[currentCol[indexInCol+1]].ones.size());
+	 // *it is what was called j in the serial code
+	 if( *it < block*BLOCKSIZE+currentBlockSize ) {
 	   continue; // these columns have already been dealt with
 	 }
-	 for( int k = 2; k < currentCol[1]+2; k++ ) {
-	   list<int>::iterator search = find( GraphOut[*indexInCol].ones.begin(), GraphOut[*indexInCol].ones.end(), currentCol[k] );
-	   if( search != GraphOut[*indexInCol].ones.end() ) {
-	     GraphOut[*indexInCol].ones.erase(search);
-	     if( k != 2 )
-	       GraphIn[currentCol[k]].ones.remove(*indexInCol);
+	 for( int k = indexInCol+1; k < indexInCol+1+currentCol[indexInCol]; k++ ) {
+	   //printf("(%d) k=%d indexInCol=%d currentCol[indexInCol]=%d, currentCol[1]=%d\n", rank, k, indexInCol, currentCol[indexInCol], currentCol[1]);
+	   list<int>::iterator search = find( GraphOut[*it].ones.begin(), GraphOut[*it].ones.end(), currentCol[k] );
+	   if( search != GraphOut[*it].ones.end() ) {
+	     GraphOut[*it].ones.erase(search);
+	     if( k != indexInCol+1 )
+	       GraphIn[currentCol[k]].ones.remove(*it);
 	   } else {
-	     GraphOut[*indexInCol].ones.push_back(currentCol[k]);
-	     if( k != 2 )
-	       GraphIn[currentCol[k]].ones.push_back(*indexInCol);	       
+	     GraphOut[*it].ones.push_back(currentCol[k]);
+	     if( k != indexInCol+1 )
+	       GraphIn[currentCol[k]].ones.push_back(*it);	       
 	   }
 	 }
        }
-       if( indexInCol == indexInColEndValue ) {
-	 GraphIn[currentCol[2]].ones.clear();
+       GraphIn[currentCol[indexInCol+1]].ones.clear();
+       colInCol++;
+       indexInCol += currentCol[indexInCol]+1;
+       if( colInCol >= currentCol[1] ) { // this is the end condition
 	 // make sure we have sent on this column before deleting it
 	 MPI_Wait(currentColOutRequest, MPI_STATUS_IGNORE);
 	 if( currentCol[0] == rank )
 	   colOfMineOnStack = false; // because there could be only one and we just finished with it
 	 
 	 free(currentCol);
+	 indexInCol = -1;
+	 colsToReduceBy.pop_front();
+	 outRequests.pop_front();
        }
+       //printf("(%d) work cycle finished\n", rank);
        continue;
      }
-     
+
+     /*
      if (c >= numCols && colsToReduceBy.size() ) {
        // there's nothing to do, but we should clear out colsToReduceBy
        while( colsToReduceBy.size() ) {
@@ -692,10 +723,12 @@ int main(int argc, char *argv[]){
 	 MPI_Wait(currentColOutRequest, MPI_STATUS_IGNORE);
 	 delete currentColOutRequest;
 	 free(currentCol);
+	 colsToReduceBy.pop_front();
+	 outRequests.pop_front();
        }
        continue;
      } 
-     
+     */
      // Nothing useful to do, apparently
      
    }
@@ -714,7 +747,7 @@ int main(int argc, char *argv[]){
        localKD++;
      else {
        /*
-	 printf("(%d) TAG %d:", rank, col+firstCol);
+	 printf("(%d) TAG %d:", rank, col);
 	 for( list<int>::iterator it = GraphOut[col].ones.begin(); it != GraphOut[col].ones.end(); it++ )
 	 printf("%d ", *it);
 	 printf("\n");
@@ -725,7 +758,7 @@ int main(int argc, char *argv[]){
    MPI_Reduce( &localKD, &kernelDimension, 1, MPI_UNSIGNED, MPI_SUM, 0, MPI_COMM_WORLD );
    MPI_Reduce( &localID, &imageDimension, 1, MPI_UNSIGNED, MPI_SUM, 0, MPI_COMM_WORLD );
    if( rank == 0 )
-     printf("(%d) TAG gradings %d %d\n", rank, kernelDimension, imageDimension );
+     printf("(%d) TAG gradings kdim=%d rank=%d\n", rank, kernelDimension, imageDimension );
    
  }
      

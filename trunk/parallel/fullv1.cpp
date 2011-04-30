@@ -556,7 +556,7 @@ int main(int argc, char *argv[]){
      vector<Generator> GraphOut( numCols ); // Will hold boundary data.
      //printf("Filling %d %d\n", I, J);
      for(int index=0; index < numCols; index++) {
-       getPerm((*cols)[firstCol+index],g);
+       getPerm((*cols)[index+firstCol],g);
        bool firstrect, secondrect;
        for(int i=0; i<gridsize; i++) {
 	 for(int j=i+1; j<gridsize; j++) {
@@ -610,7 +610,7 @@ int main(int argc, char *argv[]){
 	     // This is, of course, wrong
 #else
 	     GraphOut[index].ones.push_back( indexgij );
-	     GraphIn[indexgij].ones.push_back( index+firstCol );
+	     GraphIn[indexgij].ones.push_back( index );
 #endif
 	   }
 	 }
@@ -829,7 +829,7 @@ int main(int argc, char *argv[]){
 	     outRequests.push_back(&rnull);
 	   }
 	   if( c < numCols ) {
-	     resolveCols(GraphOut, GraphIn, inCol+2, inCol[1], c, firstCol);
+	     resolveCols(GraphOut, GraphIn, inCol+2, inCol[1], c);
 	   }
 	   continue;
 	 }
@@ -886,12 +886,12 @@ int main(int argc, char *argv[]){
 	     // all the columns on the queue
 	     for( std::deque<int*>::iterator it = colsToReduceBy.begin(); it != colsToReduceBy.end(); it++ ) {
 	       int *columnFromQueue = *it;
-	       resolveCols(GraphOut, GraphIn, columnFromQueue+2, columnFromQueue[1], c, firstCol);
+	       resolveCols(GraphOut, GraphIn, columnFromQueue+2, columnFromQueue[1], c);
 	     }
 	     // also the column we are currently working on
 	     if( indexInCol != indexInColEndValue ) {
 	       // this should just deal with it, whether or not there is anything to resolve
-	       resolveCols(GraphOut, GraphIn, currentCol+2, currentCol[1], c, firstCol);
+	       resolveCols(GraphOut, GraphIn, currentCol+2, currentCol[1], c);
 	     }
 	   }
 	 } while( c < numCols && (!GraphOut[c].alive || GraphOut[c].ones.size()==0) );
@@ -917,17 +917,17 @@ int main(int argc, char *argv[]){
 	     break;
 	   }
 	   // indexInCol is what was called j in the serial code
-	   if( *indexInCol - firstCol <= c ) {
+	   if( *indexInCol <= c ) {
 	     continue; // these columns have already been dealt with
 	   }
 	   for( int k = 2; k < currentCol[1]+2; k++ ) {
-	     list<int>::iterator search = find( GraphOut[*indexInCol - firstCol].ones.begin(), GraphOut[*indexInCol - firstCol].ones.end(), currentCol[k] );
-	     if( search != GraphOut[*indexInCol - firstCol].ones.end() ) {
-	       GraphOut[*indexInCol - firstCol].ones.erase(search);
+	     list<int>::iterator search = find( GraphOut[*indexInCol].ones.begin(), GraphOut[*indexInCol].ones.end(), currentCol[k] );
+	     if( search != GraphOut[*indexInCol].ones.end() ) {
+	       GraphOut[*indexInCol].ones.erase(search);
 	       if( k != 2 )
 		 GraphIn[currentCol[k]].ones.remove(*indexInCol);
 	     } else {
-	       GraphOut[*indexInCol - firstCol].ones.push_back(currentCol[k]);
+	       GraphOut[*indexInCol].ones.push_back(currentCol[k]);
 	       if( k != 2 )
 		 GraphIn[currentCol[k]].ones.push_back(*indexInCol);	       
 	     }

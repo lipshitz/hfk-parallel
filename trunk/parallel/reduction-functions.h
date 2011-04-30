@@ -11,7 +11,7 @@ void increment( int &turn, int fP, int nP ) {
 
 // add column to c in the graph if the first one of column also appears in c
 // it would be very inefficient to use this for full matrix reduction, but it should be fine if used only on a single column
-void resolveCols(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int* column, int size, int c, int firstCol) {
+void resolveCols(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int* column, int size, int c) {
   int pivot = column[0];
   list<int> &col2 = GraphOut[c].ones;
   list<int>::iterator location = find(col2.begin(), col2.end(), pivot);
@@ -22,16 +22,42 @@ void resolveCols(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int* c
     if( search != GraphOut[c].ones.end() ) {
       GraphOut[c].ones.erase(search);
       if( column[k] != pivot ) 
-	GraphIn[column[k]].ones.remove(c+firstCol);
+	GraphIn[column[k]].ones.remove(c);
     } else {
       GraphOut[c].ones.push_back(column[k]);
       if( column[k] != pivot )
-	GraphIn[column[k]].ones.push_back(c+firstCol);
+	GraphIn[column[k]].ones.push_back(c);
     }
   }
 }
 
-void displayMatrix(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int rows, int cols, int rank, int firstCol) {
+// for resolving with a column in GraphOut
+void resolveColsInternal(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int column, int c) {
+  list<int>::iterator k = GraphOut[column].ones.begin();
+  if( k == GraphOut[column].ones.end() )
+    return; // column is empty
+  int pivot = *k;
+  list<int> &col2 = GraphOut[c].ones;
+  list<int>::iterator location = find(col2.begin(), col2.end(), pivot);
+  if( location == col2.end() )
+    return;
+  for( ; k != GraphOut[column].ones.end(); k++ ) {
+    list<int>::iterator search = find( GraphOut[c].ones.begin(), GraphOut[c].ones.end(), *k );
+    if( search != GraphOut[c].ones.end() ) {
+      GraphOut[c].ones.erase(search);
+      //if( *k != pivot )  // I don't think we want these conditions
+	GraphIn[*k].ones.remove(c);
+    } else {
+      GraphOut[c].ones.push_back(*k);
+      //if( *k != pivot )
+	GraphIn[*k].ones.push_back(c);
+    }
+  }
+}
+
+// if the lists in Generator.ones were sorted, it would be efficient to do multiple columns together instead of these
+
+void displayMatrix(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int rows, int cols, int rank) {
   for( int r = 0; r < rows; r++ ) {
     printf("(%d): ", rank);
     for( int c = 0; c < cols; c++ ) {
@@ -41,7 +67,7 @@ void displayMatrix(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int 
 	if( *it == r )
 	  foundOut = true;
       for( list<int>::iterator it = GraphIn[r].ones.begin(); it != GraphIn[r].ones.end(); it++ ) {
-	if( *it == c+firstCol )
+	if( *it == c )
 	  foundIn = true;
       }
       if( foundOut && foundIn ) 
