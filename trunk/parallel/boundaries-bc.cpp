@@ -171,18 +171,12 @@ int main(int argc, char *argv[]){
  Factorial[14] = 14*Factorial[13];
  Factorial[15] = 15*Factorial[14];
 
- int amin=0;
- int amax=20;
-
  int  numcomp = NumComp();
  if( rank == 0 && !justTime )
    printf("Number of components: %d\n", numcomp);
 
  if( rank == 0 )
    if(!ValidGrid()) {printf("Invalid grid!!\n"); return 0;} // Check that the grid is valid
- double starttime;
- if( rank == 0 )
-   starttime = read_timer(); // Used to record how long this takes
 
  // Record for later use whether every possible rectangle has a black or white dot in it
  // This will speed boundary computations.
@@ -209,7 +203,8 @@ int main(int argc, char *argv[]){
 
  // Read in the sorted list of generators for both rows and columns
  if( rank == 0 ) {
-   printf("reading in rows\n");
+   if( !justTime )
+     printf("reading in rows\n");
    char rowFile[30];
    sprintf(rowFile, "%s/gen%d,%d.dat", saveDir, aGrading+30, mGrading+30);
    FILE *f;
@@ -225,9 +220,11 @@ int main(int argc, char *argv[]){
      }
      fclose(f);
    } else {
-     printf("waring, no such file %s\n", rowFile);
+     if( !justTime )
+       printf("waring, no such file %s\n", rowFile);
    }
-   printf("reading in columns\n");
+   if( !justTime )
+     printf("reading in columns\n");
    char colFile[30];
    sprintf(colFile, "%s/gen%d,%d.dat", saveDir, aGrading+30, mGrading+31);
    f = fopen(colFile, "r");
@@ -242,10 +239,14 @@ int main(int argc, char *argv[]){
      }
      fclose(f);
    } else {
-     printf("waring, no such file %s\n", colFile);
+     if( !justTime )
+       printf("waring, no such file %s\n", colFile);
    }
  }
 
+ double starttime;
+ if( rank == 0 )
+   starttime = read_timer(); // Used to record how long this takes
 
  // Send rows and cols to everyone
  int num_generators;
@@ -307,7 +308,8 @@ int main(int argc, char *argv[]){
      numBlocks = numFullBlocks;
    int numCols = numFullBlocks*BLOCKSIZE + tailSize;
    
-   printf("(%d) ownership determined, I have %d blocks of size %d and %d extra columns at the end for a total of %d columns\n", rank, numFullBlocks, BLOCKSIZE, tailSize, numCols);
+   if( !justTime )
+     printf("(%d) ownership determined, I have %d blocks of size %d and %d extra columns at the end for a total of %d columns\n", rank, numFullBlocks, BLOCKSIZE, tailSize, numCols);
 
    // Each proc calculates the part of the matrix that it owns, storing both rows and columns as in the serial code.  It holds entire columns, but only certain rows
    vector<Generator> GraphIn( rows.size() ); // Will hold boundary data.
@@ -381,7 +383,8 @@ int main(int argc, char *argv[]){
        }
      }
    }
-   printf("(%d) Matrix filled\n", rank);
+   if( !justTime )
+     printf("(%d) Matrix filled\n", rank);
 
    //char fileName[10];
    //sprintf(fileName, "outmat%d", rank); 
@@ -403,9 +406,6 @@ int main(int argc, char *argv[]){
    int globalTurn = 0; // This just keeps increasing
    std::deque<int*> colsToReduceBy;
    std::deque<MPI_Request*> outRequests; // keep these so we can make sure we have sent a given column when we dequeue it befor we delete it
-   bool waitingForSize = false;
-   bool waitingForCol = false;
-   int waitingSource = -1; // the processor from which we are currently waiting
    bool colOfMineOnStack = false; // we don't want to ever have multiple columns of our own on the stack (it means the one we are about to add hasn't been reduced sufficiently yet)
    int nextProc = rank + 1;
    if( nextProc == n_proc )
@@ -413,7 +413,6 @@ int main(int argc, char *argv[]){
    int prevProc = rank - 1;
    if( prevProc < 0 )
      prevProc = n_proc - 1;
-   MPI_Request *inRequest;
    MPI_Request *finishedInRequest;
    MPI_Request *finishedOutRequest;
    int finishedOutSignal[2];
@@ -438,7 +437,6 @@ int main(int argc, char *argv[]){
    for( int p = 0; p < n_proc; p++ )
      procsReportingFinished[p] = -1;
    bool selfFinished = false;
-   int zero = 0;
    
    while( numProcReportingFinished < n_proc ) { // main loop for the reduction.  The key principle is that we only do one thing per loop iteration
 
@@ -732,7 +730,8 @@ int main(int argc, char *argv[]){
      // Nothing useful to do, apparently
      
    }
-   printf("(%d) Outside main reduction loop\n", rank);
+   if( !justTime )
+     printf("(%d) Outside main reduction loop\n", rank);
    
    
    //printf("(%d) imposing barrier\n", rank);
@@ -769,7 +768,7 @@ int main(int argc, char *argv[]){
 
  // Should now output the results
 
- if( rank == 0 ) {
+ if( rank == 0 && !justTime ) {
    printf("Result: %d %d\n", kernelDimension, imageDimension);
    char outFile[30];
    sprintf(outFile, "%s/bnd%d,%d.dat", saveDir, aGrading, mGrading);
