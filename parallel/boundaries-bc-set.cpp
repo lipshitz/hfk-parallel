@@ -172,9 +172,6 @@ int main(int argc, char *argv[]){
  Factorial[14] = 14*Factorial[13];
  Factorial[15] = 15*Factorial[14];
 
- int amin=0;
- int amax=20;
-
  int  numcomp = NumComp();
  if( rank == 0 && !justTime )
    printf("Number of components: %d\n", numcomp);
@@ -406,9 +403,6 @@ int main(int argc, char *argv[]){
    int globalTurn = 0; // This just keeps increasing
    std::deque<int*> colsToReduceBy;
    std::deque<MPI_Request*> outRequests; // keep these so we can make sure we have sent a given column when we dequeue it befor we delete it
-   bool waitingForSize = false;
-   bool waitingForCol = false;
-   int waitingSource = -1; // the processor from which we are currently waiting
    bool colOfMineOnStack = false; // we don't want to ever have multiple columns of our own on the stack (it means the one we are about to add hasn't been reduced sufficiently yet)
    int nextProc = rank + 1;
    if( nextProc == n_proc )
@@ -441,7 +435,6 @@ int main(int argc, char *argv[]){
    for( int p = 0; p < n_proc; p++ )
      procsReportingFinished[p] = -1;
    bool selfFinished = false;
-   int zero = 0;
    
    while( numProcReportingFinished < n_proc ) { // main loop for the reduction.  The key principle is that we only do one thing per loop iteration
 
