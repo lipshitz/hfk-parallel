@@ -181,9 +181,6 @@ int main(int argc, char *argv[]){
 
  if( rank == 0 )
    if(!ValidGrid()) {printf("Invalid grid!!\n"); return 0;} // Check that the grid is valid
- double starttime;
- if( rank == 0 )
-   starttime = read_timer(); // Used to record how long this takes
 
  // Record for later use whether every possible rectangle has a black or white dot in it
  // This will speed boundary computations.
@@ -228,7 +225,8 @@ int main(int argc, char *argv[]){
    } else {
      printf("waring, no such file %s\n", rowFile);
    }
-   printf("reading in columns\n");
+   if( !justTime )
+     printf("reading in columns\n");
    char colFile[30];
    sprintf(colFile, "%s/gen%d,%d.dat", saveDir, aGrading+30, mGrading+31);
    f = fopen(colFile, "r");
@@ -243,9 +241,14 @@ int main(int argc, char *argv[]){
      }
      fclose(f);
    } else {
-     printf("waring, no such file %s\n", colFile);
+     if( !justTime )
+       printf("waring, no such file %s\n", colFile);
    }
  }
+
+ double starttime;
+ if( rank == 0 )
+   starttime = read_timer(); // Used to record how long this takes
 
 
  // Send rows and cols to everyone
@@ -274,9 +277,6 @@ int main(int argc, char *argv[]){
  if( rank != 0 )
    cols.assign(buffer, buffer+num_generators);
  
- // if j is 0, we are done, because there is no calculation with those cols
- //if (j == 0)
- //continue;
 
  int imageDimension, kernelDimension;
 
@@ -308,7 +308,8 @@ int main(int argc, char *argv[]){
      numBlocks = numFullBlocks;
    int numCols = numFullBlocks*BLOCKSIZE + tailSize;
    
-   printf("(%d) ownership determined, I have %d blocks of size %d and %d extra columns at the end for a total of %d columns\n", rank, numFullBlocks, BLOCKSIZE, tailSize, numCols);
+   if( !justTime )
+     printf("(%d) ownership determined, I have %d blocks of size %d and %d extra columns at the end for a total of %d columns\n", rank, numFullBlocks, BLOCKSIZE, tailSize, numCols);
 
    // Each proc calculates the part of the matrix that it owns, storing both rows and columns as in the serial code.  It holds entire columns, but only certain rows
    vector<Generator> GraphIn( rows.size() ); // Will hold boundary data.
@@ -382,7 +383,8 @@ int main(int argc, char *argv[]){
        }
      }
    }
-   printf("(%d) Matrix filled\n", rank);
+   if( !justTime )
+     printf("(%d) Matrix filled\n", rank);
 
    //char fileName[10];
    //sprintf(fileName, "outmat%d", rank); 
@@ -733,7 +735,8 @@ int main(int argc, char *argv[]){
      // Nothing useful to do, apparently
      
    }
-   printf("(%d) Outside main reduction loop\n", rank);
+   if( !justTime )
+     printf("(%d) Outside main reduction loop\n", rank);
    
    
    //printf("(%d) imposing barrier\n", rank);
@@ -770,7 +773,7 @@ int main(int argc, char *argv[]){
 
  // Should now output the results
 
- if( rank == 0 ) {
+ if( rank == 0 && !justTime ) {
    printf("Result: %d %d\n", kernelDimension, imageDimension);
    char outFile[30];
    sprintf(outFile, "%s/bnd%d,%d.dat", saveDir, aGrading, mGrading);
