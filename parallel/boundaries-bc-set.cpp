@@ -384,9 +384,9 @@ int main(int argc, char *argv[]){
    }
    printf("(%d) Matrix filled\n", rank);
 
-   char fileName[10];
-   sprintf(fileName, "outmat%d", rank); 
-   printMatrix(fileName, GraphOut);
+   //char fileName[10];
+   //sprintf(fileName, "outmat%d", rank); 
+   //printMatrix(fileName, GraphOut);
 
    // this skips over the first matrix in 10_125
    //if( i == 30 && j == 26 )
