@@ -133,6 +133,7 @@ int main(int argc, char *argv[]){
  bool justTime = read_int( argc, argv, "-t", 0 );
  int aGrading = read_int( argc, argv, "-a", -100 );
  int mGrading = read_int( argc, argv, "-m", -100 );
+ int BLOCKSIZE = read_int( argc, argv, "-b", 10 );
  if( aGrading == -100 || mGrading == -100 ) {
    printf("Must specify in which grading to calculate the boundary image and kernel dimensions with -a and -g\n");
    MPI_Finalize();
@@ -279,8 +280,6 @@ int main(int argc, char *argv[]){
  //continue;
 
  int imageDimension, kernelDimension;
-
- int BLOCKSIZE = 10;
 
  if( cols.size() == 0 || rows.size() == 0 ) {
    imageDimension = 0;
