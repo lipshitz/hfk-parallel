@@ -57,53 +57,21 @@ double read_timer( )
     return (end.tv_sec - start.tv_sec) + 1.0e-6 * (end.tv_usec - start.tv_usec);
 }
 
-// Globals
-
-//const int gridsize = 12; // arc-index
-//const int gridsize = 12;
-
+//Globals 
 int gridsize = 12; // arc-index
 int *white;
 int *black;
 int default_white[12] = {9,5,11,7,8,1,10,4,0,3,2,6};
 int default_black[12] = {1,0,4,3,2,6,5,9,8,11,7,10};
-// Trefoil
-//int white[5] = {1, 2, 3, 4, 0};
-//int black[5] = {4, 0, 1, 2, 3};
 
-//int white[10] = {8,7,6,5,4,3,2,9,1,0};
-//int black[10] = {1,3,9,0,7,5,8,4,6,2};
-
-// Kinoshita-Terasaka KT_{2,1}
-//int white[11]={5,10,9,4,8,0,1,6,7,2,3};
-//int black[11]={0,6,1,7,10,2,5,9,3,4,8};
-
-
-
-// Don't waste time computing factorials.  Look them up.
-// Fill in the big ones later since g++ doesn't seem to like big constants
-long long Factorial[16] = {
-  1,1,2,6,24,120,720,5040,40320,362880,3628800,39916800,479001600,
-  0,0,0};
-
-//braid: (xy)^{-5}
-//int white[10] = {7,6,5,3,4,1,2,0,9,8};
-//int black[10] = {0,9,8,6,7,4,5,3,2,1};
-
-//another braid
-//int white[11] = {5,2,3,1,4,6,7,8,9,0};
-//int black[11] = {1,9,0,5,2,3,4,6,7,8};
-
-//int white[2] = {0,1};
-//int black[2] = {1,0};
+long long *Factorial;
 
 // Function Prototypes
-
+inline int max( int a, int b ) { return a > b ? a : b; }
+inline int min( int a, int b ) { return a < b ? a : b; }
 void getPerm( long long n, int *P);
 void NextPerm(short counter[], int h[]);
 bool RectDotFree(int xll, int yll, int xur, int yur, int which); 
-inline int max( int a, int b ) { return a > b ? a : b; }
-inline int min( int a, int b ) { return a < b ? a : b; }
 // Decides whether one of the four rectangles on the torus with corners at(xll,yll) and (xur,yur) contains no white or black dots
 /*
  1 | 2 | 1
@@ -118,7 +86,7 @@ int WindingNumber(int x, int y); // Return winding number of the knot projection
 int MaslovGrading(int y []);
 int NumComp(); //Returns the number of components of the link.
 bool ValidGrid();
-int Find(vector<long long> & V, long long x); // Returns i if V[i]=x or -1 if x isn't V[i] for any i
+int Find(vector<long long> & V, long long x); // Returns i if V[i]=x or -1 if x isn't V[i] for any i, assuming V is sorted
 
 // Main
 
@@ -172,9 +140,11 @@ int main(int argc, char *argv[]){
    fscanf(f, "%d ", black+i);
  fclose(f);
 
- Factorial[13] = 13*Factorial[12];
- Factorial[14] = 14*Factorial[13];
- Factorial[15] = 15*Factorial[14];
+ Factorial = (long long *) malloc( gridsize * sizeof( long long ) );
+ Factorial[0] = 1;
+ for( int i = 1; i < gridsize; i++ )
+   Factorial[i] = i*Factorial[i-1];
+   
 
  int  numcomp = NumComp();
  if( rank == 0 && !justTime )
@@ -226,7 +196,7 @@ int main(int argc, char *argv[]){
      fclose(f);
    } else {
      if( !justTime )
-       printf("waring, no such file %s\n", rowFile);
+       printf("warning, no such file %s\n", rowFile);
    }
    if( !justTime )
      printf("reading in columns\n");
@@ -279,10 +249,6 @@ int main(int argc, char *argv[]){
  if( rank != 0 )
    cols.assign(buffer, buffer+num_generators);
  
- // if j is 0, we are done, because there is no calculation with those cols
- //if (j == 0)
- //continue;
-
  int imageDimension, kernelDimension;
 
  if( cols.size() == 0 || rows.size() == 0 ) {
@@ -315,16 +281,15 @@ int main(int argc, char *argv[]){
      printf("(%d) ownership determined, I have %d blocks of size %d and %d extra columns at the end for a total of %d columns\n", rank, numFullBlocks, BLOCKSIZE, tailSize, numCols);
 
    // Each proc calculates the part of the matrix that it owns, storing both rows and columns as in the serial code.  It holds entire columns, but only certain rows
-   vector<Generator> GraphIn( rows.size() ); // Will hold boundary data.
-   vector<Generator> GraphOut( numCols ); // Will hold boundary data.
-   //printf("Filling %d %d\n", I, J);
+   vector<Generator> GraphIn( rows.size() );
+   vector<Generator> GraphOut( numCols );
    int globalIndex = BLOCKSIZE*rank-BLOCKSIZE*(n_proc-1)-1;
    for(int index=0; index < numCols; index++) {
      // update globalIndex
      if( index % BLOCKSIZE == 0 )
        globalIndex += BLOCKSIZE*(n_proc-1);
      globalIndex++;
-     //printf("(%d) li=%d gi=%d\n", rank, index, globalIndex);
+
      getPerm(cols[globalIndex],g);
      bool firstrect, secondrect;
      for(int i=0; i<gridsize; i++) {
@@ -374,13 +339,9 @@ int main(int argc, char *argv[]){
 #ifdef FIELD_Z3
 	   printf("Not implemented\n");
 	   exit(-1);
-	   //GraphOut[index].ones.push_back( indexgij );
-	   //GraphIn[indexgij].ones.push_back( index );
-	   // This is, of course, wrong
 #else
 	   GraphOut[index].ones.push_back( indexgij );
 	   GraphIn[indexgij].ones.push_back(index);
-	   //printf("filling entry %d %d\n", globalIndex+1, indexgij+1);
 #endif
 	 }
        }
@@ -389,33 +350,29 @@ int main(int argc, char *argv[]){
    if( !justTime )
      printf("(%d) Matrix filled\n", rank);
 
-   /* 
-      Unlike previous versions, send a block at a time.  The format of a message is: <origProc> <col1Size> <col1Entry1> ... <col1lastEntry> <col2size> ...
-      Everything below this line needs to be updated
-   */
+   //Unlike previous versions, send a block at a time.  The format of a message is: <origProc> <col1Size> <col1Entry1> ... <col1lastEntry> <col2size> ...
 #define TAG_COLUMN 11
 #define TAG_FINISHED 12
 
 #ifdef PROFILE
-   //double waitingTime = 0;
    int colsAhead = 0;
    int numBlocksSkipped = 0;
+   double totalDeleteWait = 0;
 #endif
-
-   int turn = 0; // the id of the matrix whose turn it is
-   int globalTurn = 0; // This just keeps increasing
-   std::deque<int*> colsToReduceBy;
-   std::deque<MPI_Request*> outRequests; // keep these so we can make sure we have sent a given column when we dequeue it befor we delete it
    int nextProc = rank + 1;
    if( nextProc == n_proc )
      nextProc = 0;
    int prevProc = rank - 1;
    if( prevProc < 0 )
      prevProc = n_proc - 1;
-   int finishedOutSignal[2];
+   
+   // These variable store the state of the reduction
+   int turn = 0; // the id of the matrix whose turn it is
+   int globalTurn = 0; // This just keeps increasing.  At any time, turn=globalTurn%n_proc
+   std::deque<int*> colsToReduceBy;
+   std::deque<MPI_Request*> outRequests; // keep these so we can make sure we have sent a given column when we dequeue it befor we delete it
    int finishedSignals[2*n_proc];
-   int *finishedInSignal = finishedSignals;
-   //bool starting = true;
+   int *finishedInSignal = finishedSignals+2;
    int indexInCol=-1;
    int colInCol;
    int *currentCol;
@@ -443,6 +400,7 @@ int main(int argc, char *argv[]){
        increment(turn, 0, n_proc);
        globalTurn++;
      }
+     // this line will produce a lot of output
      //printf("(%d) in reduction, block = %d/%d, turn = %d(%d), numfinished = %d, selfFinished = %d(%d), colsToReduceBy.size = %lu, outRequests.size() = %lu\n", rank, block, numBlocks, turn, globalTurn, numProcReportingFinished, selfFinished, procsReportingFinished[rank], colsToReduceBy.size(), outRequests.size());
 
      // check if we have received a notification that another processor is done
@@ -469,20 +427,6 @@ int main(int argc, char *argv[]){
        }
      }
 
-     // check if we ourselves are done
-     if( !selfFinished && (block >= numBlocks) ) {
-       selfFinished = true;
-       procsReportingFinished[rank] = globalTurn;
-       numProcReportingFinished++;
-       // send a message along the chain
-       MPI_Request req;
-       //printf("(%d) sending out my done signal\n", rank);
-       finishedOutSignal[0] = rank;
-       finishedOutSignal[1] = globalTurn;
-       MPI_Isend( finishedOutSignal, 2, MPI_INT, nextProc, TAG_FINISHED, MPI_COMM_WORLD, &req);
-       continue;
-     }
-     
      // if it is not our turn, see if there is a message to pick up
      if( turn != rank ) {
        MPI_Status stat;
@@ -494,13 +438,6 @@ int main(int argc, char *argv[]){
 	 int *inCols;
 	 inCols = (int*) malloc( inSize*sizeof(int) );
 	 MPI_Recv( inCols, inSize, MPI_INT, prevProc, TAG_COLUMN, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
-	 /*
-	 printf("(%d) received a block: ", rank);
-	 for( int l = 0; l < inSize; l++ )
-	   printf("%d ", inCols[l]);
-	 printf("\n");
-	 printf("(%d) received while block*BLOCKSIZE=%d\n", rank, block*BLOCKSIZE);
-	 */
 	 globalTurn += inCols[0] - turn;
 	 if( inCols[0] < turn )
 	   globalTurn += n_proc;
@@ -508,7 +445,7 @@ int main(int argc, char *argv[]){
 	 increment(turn, 0, n_proc);
 	 globalTurn++;
 
-	 if( inCols[1] ) { // the new columns are not zero, add it to the queue
+	 if( inCols[1] || selfFinished ) { // the new columns are not zero, add it to the queue.  Alternately, if this process is finished, it needs to pass the zero column along since it won't ever send a column of its own, and adding to the queue won't hurt
 	   colsToReduceBy.push_back(inCols);
 	   if( inCols[0] != nextProc ) { //pass on, unless it has made it all the way around
 	     MPI_Request *outReq;
@@ -534,16 +471,18 @@ int main(int argc, char *argv[]){
        }
      }
 
-     if( turn == rank && !selfFinished && // it is our turn to send 
+     if( turn == rank && // it is our turn to send 
 	 colsToReduceBy.size() < maxQueueSize // but don't let the queue get too big
 	 ){
        // resolve a block of columns with eachother, (fully? there is no need to do it fully, unless we are going to have multiple threads work on different ones at once)
-
-       for( int source = block*BLOCKSIZE; source < block*BLOCKSIZE+currentBlockSize; source++ )
-	 for( int target = block*BLOCKSIZE; target < block*BLOCKSIZE+currentBlockSize; target++ )
-	   //if( source != target ) // for full reduction
-	   if( source < target ) // for partial reduction
-	     resolveColsInternal(GraphOut, GraphIn, source, target);
+       /* For full reduction, use these lines
+       //for( int source = block*BLOCKSIZE; source < block*BLOCKSIZE+currentBlockSize; source++ )
+       //for( int target = block*BLOCKSIZE; target < block*BLOCKSIZE+currentBlockSize; target++ )
+       //if( source != target )
+       */
+       for( int source = block*BLOCKSIZE; source < block*BLOCKSIZE+currentBlockSize-1; source++ )
+	 for( int target = source+1; target < block*BLOCKSIZE+currentBlockSize; target++ )
+	   resolveColsInternal(GraphOut, GraphIn, source, target);
 
        // assemble them to send       
        int numColumns=0, *columns, totalEntries=0;
@@ -596,24 +535,33 @@ int main(int argc, char *argv[]){
 	     break;
 	   }
 	 if( allZero ) {
-	   //printf("(%d) skipping over a block that is all zero %d/%d\n", rank, block, numBlocks);
 #ifdef PROFILE
+	   //printf("(%d) skipping over a block that is all zero %d/%d (%d)\n", rank, block, numBlocks, numFullBlocks);
 	   numBlocksSkipped++;
 #endif
 	   block++;
 	   if( block == numFullBlocks )
 	     currentBlockSize = tailSize;
 	 }
-       }
        
-       // resolve the new block with all the columns on the queue
-       if( block < numBlocks ) {
-	 for( std::deque<int*>::iterator it = colsToReduceBy.begin(); it != colsToReduceBy.end(); it++ ) {
-	   int *columnsFromQueue = *it;
-	   int colStartIndex = 2;
-	   for( int col = 0; col < columnsFromQueue[1]; col++, colStartIndex += columnsFromQueue[colStartIndex]+1 )
-	     for( int target = block*BLOCKSIZE; target < block*BLOCKSIZE+currentBlockSize; target++ )
-	       resolveCols(GraphOut, GraphIn, columnsFromQueue+colStartIndex+1, columnsFromQueue[colStartIndex], target);
+       
+	 // resolve the new block with all the columns on the queue
+	 if( block < numBlocks ) {
+	   for( std::deque<int*>::iterator it = colsToReduceBy.begin(); it != colsToReduceBy.end(); it++ ) {
+	     int *columnsFromQueue = *it;
+	     int colStartIndex = 2;
+	     for( int col = 0; col < columnsFromQueue[1]; col++, colStartIndex += columnsFromQueue[colStartIndex]+1 )
+	       for( int target = block*BLOCKSIZE; target < block*BLOCKSIZE+currentBlockSize; target++ )
+		 resolveCols(GraphOut, GraphIn, columnsFromQueue+colStartIndex+1, columnsFromQueue[colStartIndex], target);
+	   }
+	 } else { // we are done, let the other processes know
+	   selfFinished = true;
+	   procsReportingFinished[rank] = globalTurn;
+	   numProcReportingFinished++;
+	   MPI_Request req;
+	   finishedSignals[0] = rank;
+	   finishedSignals[1] = globalTurn;
+	   MPI_Isend( finishedSignals, 2, MPI_INT, nextProc, TAG_FINISHED, MPI_COMM_WORLD, &req);
 	 }
        }
        continue;
@@ -651,7 +599,13 @@ int main(int argc, char *argv[]){
        indexInCol += currentCol[indexInCol]+1;
        if( colInCol >= currentCol[1] ) { // this is the end condition
 	 // make sure we have sent on this column before deleting it
+#ifdef PROFILE
+	 double deleteWait = read_timer();
+#endif
 	 MPI_Wait(currentColOutRequest, MPI_STATUS_IGNORE);
+#ifdef PROFILE
+	 totalDeleteWait += read_timer()-deleteWait;
+#endif
 	 
 	 free(currentCol);
 	 indexInCol = -1;
@@ -699,7 +653,6 @@ int main(int argc, char *argv[]){
        MPI_Status stat;
        MPI_Iprobe( prevProc, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, &stat);
      }
-     
    }
    if( !justTime )
      printf("(%d) Outside main reduction loop\n", rank);
@@ -733,7 +686,7 @@ int main(int argc, char *argv[]){
      printf("(%d) TAG gradings kdim=%d rank=%d\n", rank, kernelDimension, imageDimension );
    
 #ifdef PROFILE
-   printf("(%d) number of columns done out of order %d, number of empty blocks skipped %d\n", rank, colsAhead, numBlocksSkipped);
+   printf("(%d) number of columns done out of order %d, number of empty blocks skipped %d, time spent waiting to delete %f\n", rank, colsAhead, numBlocksSkipped, totalDeleteWait);
    /*
    printf("(%d) profile results, spent %d of %d cycles waiting", rank, totalWaitingCycles, totalCycles);
    printf("(%d) significant ones are:\n", rank);
