@@ -17,6 +17,8 @@
 using std::list;
 using std::vector;
 
+#define PROFILE
+
 int find_option( int argc, char **argv, const char *option )
 {
     for( int i = 1; i < argc; i++ )
@@ -129,11 +131,12 @@ int main(int argc, char *argv[]){
  MPI_Comm_rank( MPI_COMM_WORLD, &rank );
  
  char *saveDir = read_string( argc, argv, "-i", NULL );
- bool printMatrices = read_int( argc, argv, "-p", 0 );
  bool justTime = read_int( argc, argv, "-t", 0 );
  int aGrading = read_int( argc, argv, "-a", -100 );
  int mGrading = read_int( argc, argv, "-m", -100 );
  int BLOCKSIZE = read_int( argc, argv, "-b", 10 );
+ int maxMineOnQueue = read_int( argc, argv, "-q", 3 );
+
  if( aGrading == -100 || mGrading == -100 ) {
    printf("Must specify in which grading to calculate the boundary image and kernel dimensions with -a and -g\n");
    MPI_Finalize();
@@ -385,40 +388,31 @@ int main(int argc, char *argv[]){
    if( !justTime )
      printf("(%d) Matrix filled\n", rank);
 
-   //char fileName[10];
-   //sprintf(fileName, "outmat%d", rank); 
-   //printMatrix(fileName, GraphOut);
-
-   // this skips over the first matrix in 10_125
-   //if( i == 30 && j == 26 )
-   //  continue;
-   
    /* 
       Unlike previous versions, send a block at a time.  The format of a message is: <origProc> <col1Size> <col1Entry1> ... <col1lastEntry> <col2size> ...
       Everything below this line needs to be updated
    */
-#define TAG_COLUMN_SIZE 10
 #define TAG_COLUMN 11
 #define TAG_FINISHED 12
+
+#ifdef PROFILE
+   double waitingTime = 0;
+#endif
 
    int turn = 0; // the id of the matrix whose turn it is
    int globalTurn = 0; // This just keeps increasing
    std::deque<int*> colsToReduceBy;
    std::deque<MPI_Request*> outRequests; // keep these so we can make sure we have sent a given column when we dequeue it befor we delete it
-   bool colOfMineOnStack = false; // we don't want to ever have multiple columns of our own on the stack (it means the one we are about to add hasn't been reduced sufficiently yet)
+   int colOfMineOnStack = 0; // we don't want to ever have multiple columns of our own on the stack (it means the one we are about to add hasn't been reduced sufficiently yet) // I don't think this is a concern anymore
    int nextProc = rank + 1;
    if( nextProc == n_proc )
      nextProc = 0;
    int prevProc = rank - 1;
    if( prevProc < 0 )
      prevProc = n_proc - 1;
-   MPI_Request *finishedInRequest;
-   MPI_Request *finishedOutRequest;
    int finishedOutSignal[2];
-   int finishedInSignal[2];
-   finishedInRequest = new MPI_Request();
-   finishedOutRequest = NULL;
-   MPI_Irecv( finishedInSignal, 2, MPI_INT, prevProc, TAG_FINISHED, MPI_COMM_WORLD, finishedInRequest );
+   int finishedSignals[2*n_proc];
+   int *finishedInSignal = finishedSignals;
    //bool starting = true;
    int indexInCol=-1;
    int colInCol;
@@ -436,9 +430,12 @@ int main(int argc, char *argv[]){
    for( int p = 0; p < n_proc; p++ )
      procsReportingFinished[p] = -1;
    bool selfFinished = false;
+   bool allOthersFinished = false;
    
    while( numProcReportingFinished < n_proc ) { // main loop for the reduction.  The key principle is that we only do one thing per loop iteration
-
+#ifdef PROFILE
+     //       totalCycles++;
+#endif
      // make sure turn is someone who is actually still working
      while( procsReportingFinished[turn] != -1 && procsReportingFinished[turn] <= globalTurn ) {
        increment(turn, 0, n_proc);
@@ -447,44 +444,29 @@ int main(int argc, char *argv[]){
      //printf("(%d) in reduction, block = %d/%d, turn = %d(%d), numfinished = %d, selfFinished = %d(%d), colsToReduceBy.size = %lu, outRequests.size() = %lu, colOfMine = %d\n", rank, block, numBlocks, turn, globalTurn, numProcReportingFinished, selfFinished, procsReportingFinished[rank], colsToReduceBy.size(), outRequests.size(), colOfMineOnStack);
 
      // check if we have received a notification that another processor is done
-     if( finishedOutRequest ) {
-       int outDone = 0;
-       MPI_Test( finishedOutRequest, &outDone, MPI_STATUS_IGNORE );
-       if( outDone ) {
-	 delete finishedOutRequest;
-	 finishedOutRequest = NULL;
-	 if( numProcReportingFinished < n_proc-1 ||
-	     numProcReportingFinished == n_proc-1 && selfFinished ) {
-	   finishedInRequest = new MPI_Request();
-	   //printf("(%d) prepared to receive another done signal\n", rank);
-	   MPI_Irecv( finishedInSignal, 2, MPI_INT, prevProc, TAG_FINISHED, MPI_COMM_WORLD, finishedInRequest );
-	 }
-	 continue;
-	 }
-     }
-     
-     if( finishedInRequest ) {
-       int someoneDone = 0;
-       MPI_Test( finishedInRequest, &someoneDone, MPI_STATUS_IGNORE );
-       if( someoneDone ) {
-	 delete finishedInRequest;
-	 finishedInRequest = NULL;
+     if( !allOthersFinished ) {
+       MPI_Status stat;
+       int flag;
+       MPI_Iprobe( prevProc, TAG_FINISHED, MPI_COMM_WORLD, &flag, &stat);
+       if( flag ) {
+	 MPI_Recv( finishedInSignal, 2, MPI_INT, prevProc, TAG_FINISHED, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
 	 procsReportingFinished[finishedInSignal[0]] = finishedInSignal[1];
 	 numProcReportingFinished++;
 	 if( finishedInSignal[0] != nextProc ) {
-	   finishedOutRequest = new MPI_Request();
-	   MPI_Isend( finishedInSignal, 2, MPI_INT, nextProc, TAG_FINISHED, MPI_COMM_WORLD, finishedOutRequest );
+	   MPI_Request req;
+	   MPI_Isend( finishedInSignal, 2, MPI_INT, nextProc, TAG_FINISHED, MPI_COMM_WORLD, &req );
+	 }
+	 // get ready for a new signal if there are any procs left not reporting done
+	 if( numProcReportingFinished < n_proc-1 ||
+	     numProcReportingFinished == n_proc-1 && selfFinished ) {
+	   finishedInSignal += 2;
 	 } else {
-	   // put out a new request if there are any procs left not reporting done
-	   if( numProcReportingFinished < n_proc-1 ||
-	       numProcReportingFinished == n_proc-1 && selfFinished ) {
-	     finishedInRequest = new MPI_Request();
-	     MPI_Irecv( &finishedInSignal, 2, MPI_INT, prevProc, TAG_FINISHED, MPI_COMM_WORLD, finishedInRequest );
-	   }	   
+	   allOthersFinished = true;
 	 }
 	 continue;
        }
      }
+
      // check if we ourselves are done
      if( !selfFinished && (block >= numBlocks) ) {
        selfFinished = true;
@@ -550,55 +532,17 @@ int main(int argc, char *argv[]){
        }
      }
 
-     if( turn == rank && selfFinished ) {
-       assert(false);
-       /*
-	 MPI_Request request1;
-	 MPI_Isend( &zero, 1, MPI_INT, nextProc, TAG_COLUMN_SIZE, MPI_COMM_WORLD, &request1 );
-	 increment(turn, 0, n_proc);
-	 globalTurn++;
-	 */
-     }
-   
      if( turn == rank && !selfFinished && // it is our turn to send 
-	 !colOfMineOnStack // but only send if we don't already have a column on the stack (perhaps redundant with the next condition
+	 //colOfMineOnStack < maxMineOnQueue // don't let the queue get too big
+	 colsToReduceBy.size() < maxMineOnQueue
 	 ){
-       // resolve a block of columns with eachother, fully (there is no need to do it fully, unless we are going to have multiple threads work on different ones at once later
-       /*
-       //debug code
-       printf("(%d) about to fully reduce a block starting at %d\n", rank, block*BLOCKSIZE);
-       printf("(%d) starting at: ", rank);
-       for( int source=block*BLOCKSIZE; source < block*BLOCKSIZE+currentBlockSize; source++ ) {
-	 int size = GraphOut[source].ones.size();
-	 if( size ) {
-	   printf("%d ", size);
-	     for( list<int>::iterator it = GraphOut[source].ones.begin(); it != GraphOut[source].ones.end(); it++ )
-	       printf("%d ", *it);
-	   }
-       }
-       printf("\n");
-       // end debug code
-       */
+       // resolve a block of columns with eachother, (fully? there is no need to do it fully, unless we are going to have multiple threads work on different ones at once)
 
        for( int source = block*BLOCKSIZE; source < block*BLOCKSIZE+currentBlockSize; source++ )
 	 for( int target = block*BLOCKSIZE; target < block*BLOCKSIZE+currentBlockSize; target++ )
-	   if( source != target ) // for full reduction
-	   //if( source < target ) // for partial reduction
+	   //if( source != target ) // for full reduction
+	   if( source < target ) // for partial reduction
 	     resolveColsInternal(GraphOut, GraphIn, source, target);
-       /*
-       //debug code
-       printf("(%d) finished with: ", rank);
-       for( int source=block*BLOCKSIZE; source < block*BLOCKSIZE+currentBlockSize; source++ ) {
-	 int size = GraphOut[source].ones.size();
-	 if( size ) {
-	   printf("%d ", size);
-	     for( list<int>::iterator it = GraphOut[source].ones.begin(); it != GraphOut[source].ones.end(); it++ )
-	       printf("%d ", *it);
-	   }
-       }
-       printf("\n");
-       // end debug code
-       */
 
        // assemble them to send       
        int numColumns=0, *columns, totalEntries=0;
@@ -632,7 +576,7 @@ int main(int argc, char *argv[]){
 	 MPI_Isend( columns, totalEntries, MPI_INT, nextProc, TAG_COLUMN, MPI_COMM_WORLD, req );
 	 outRequests.push_back(req); 
 	 colsToReduceBy.push_back(columns);
-	 colOfMineOnStack = true;
+	 colOfMineOnStack++;
        } else { // just send out the empty message, but don't put in on the queue
 	 MPI_Request req;
 	 MPI_Isend( emptyCol, 2, MPI_INT, nextProc, TAG_COLUMN, MPI_COMM_WORLD, &req );
@@ -655,7 +599,7 @@ int main(int argc, char *argv[]){
 	 }
        }
        continue;
- }
+     }
      
      
      // do some work on the columns we are working on
@@ -698,7 +642,7 @@ int main(int argc, char *argv[]){
 	 // make sure we have sent on this column before deleting it
 	 MPI_Wait(currentColOutRequest, MPI_STATUS_IGNORE);
 	 if( currentCol[0] == rank )
-	   colOfMineOnStack = false; // because there could be only one and we just finished with it
+	   colOfMineOnStack--; // because there could be only one and we just finished with it
 	 
 	 free(currentCol);
 	 indexInCol = -1;
@@ -727,10 +671,18 @@ int main(int argc, char *argv[]){
      } 
      */
      // Nothing useful to do, apparently
+#ifdef PROFILE
+     double waitingStartTime = read_timer();
+     MPI_Status stat;
+     MPI_Probe( prevProc, MPI_ANY_TAG, MPI_COMM_WORLD, &stat);
+     waitingTime += read_timer() - waitingStartTime;
+#endif
      
    }
    if( !justTime )
      printf("(%d) Outside main reduction loop\n", rank);
+   
+   
    
    
    //printf("(%d) imposing barrier\n", rank);
@@ -758,13 +710,20 @@ int main(int argc, char *argv[]){
    if( rank == 0 )
      printf("(%d) TAG gradings kdim=%d rank=%d\n", rank, kernelDimension, imageDimension );
    
+#ifdef PROFILE
+   printf("(%d) total time spend waiting %f\n", rank, waitingTime);
+   /*
+   printf("(%d) profile results, spent %d of %d cycles waiting", rank, totalWaitingCycles, totalCycles);
+   printf("(%d) significant ones are:\n", rank);
+   for( int i = 0; i < numBlocks+1; i++ )
+     if( waitingCycles[i] > totalWaitingCycles/100 )
+       printf("(%d) %d : %d\n", rank, i, waitingCycles[i]);
+   */
+#endif
+   if( rank == 0 ) {
+     printf("Time to compute and reduce the matrix %f\n", read_timer()-starttime); 
+   }
  }
-     
-     
-  if( rank == 0 ) {
-   printf("Time to compute and reduce the matrix %f\n", read_timer()-starttime); 
-  }
-
  // Should now output the results
 
  if( rank == 0 && !justTime ) {
