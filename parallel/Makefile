@@ -1,4 +1,4 @@
-all:	gradings fullv1 boundaries boundaries-bc boundaries-bc-set
+all:	gradings fullv1 boundaries boundaries-bc boundaries-bc-set nnz
 
 gradings:	gradings.cpp
 	mpicxx -o gradings gradings.cpp
@@ -17,3 +17,6 @@ boundaries-openmp:	boundaries-openmp.cpp matrix-z2z3.h reduction-functions.h
 
 boundaries-bc-set:	boundaries-bc-set.cpp matrix-z2z3-set.h reduction-functions-set.h
 	mpicxx -o boundaries-bc-set boundaries-bc-set.cpp
+
+nnz:	nnz.cpp
+	mpicxx -o nnz nnz.cpp
