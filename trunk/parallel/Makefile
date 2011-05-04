@@ -1,4 +1,4 @@
-all:	gradings fullv1 boundaries boundaries-bc boundaries-bc-set nnz
+all:	gradings fullv1 boundaries boundaries-bc boundaries-bc-set nnz boundaries-serial
 
 gradings:	gradings.cpp
 	mpicxx -o gradings gradings.cpp
@@ -20,3 +20,6 @@ boundaries-bc-set:	boundaries-bc-set.cpp matrix-z2z3-set.h reduction-functions-s
 
 nnz:	nnz.cpp
 	mpicxx -o nnz nnz.cpp
+
+boundaries-serial:	boundaries-serial.cpp matrix-z2z3.h reduction-functions.h
+	g++ -o boundaries-serial boundaries-serial.cpp
