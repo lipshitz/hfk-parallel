@@ -105,6 +105,8 @@ int main(int argc, char *argv[]){
  int BLOCKSIZE = read_int( argc, argv, "-b", 10 );
  int maxQueueSize = read_int( argc, argv, "-q", n_proc );
  int AHEAD_LIMIT = read_int( argc, argv, "-l", n_proc/2 );
+ int MAX_ROWS_PER_CYCLE_INPUT = read_int( argc, argv, "-r", 10 );
+ int MAX_ROWS_PER_CYCLE = MAX_ROWS_PER_CYCLE_INPUT;
 
  if( aGrading == -100 || mGrading == -100 ) {
    printf("Must specify in which grading to calculate the boundary image and kernel dimensions with -a and -m\n");
@@ -359,6 +361,7 @@ int main(int argc, char *argv[]){
    int colsAhead = 0;
    int numBlocksSkipped = 0;
    double totalDeleteWait = 0;
+   double waitTime = 0;
 #endif
    int nextProc = rank + 1;
    if( nextProc == n_proc )
@@ -374,9 +377,11 @@ int main(int argc, char *argv[]){
    std::deque<MPI_Request*> outRequests; // keep these so we can make sure we have sent a given column when we dequeue it befor we delete it
    int finishedSignals[2*n_proc];
    int *finishedInSignal = finishedSignals+2;
-   int indexInCol=-1;
-   int colInCol;
-   int *currentCol;
+   int indexInCurrentCols=-1;
+   int colInCurrentCols;
+   int *currentCols;
+   list<int>::iterator indexInCol;
+   list<int>::iterator indexInColEndValue = indexInCol;
    MPI_Request *currentColOutRequest;
    int emptyCol[2];
    emptyCol[0] = rank;
@@ -568,38 +573,53 @@ int main(int argc, char *argv[]){
        }
        continue;
      }
-     
-     
+
+     // expedited reduction if our queue is too big
+     MAX_ROWS_PER_CYCLE = MAX_ROWS_PER_CYCLE_INPUT;
+     if( colsToReduceBy.size() >= maxQueueSize ) {
+       MAX_ROWS_PER_CYCLE = 1000000; // really I just want infininty here
+     }     
+
      // do some work on the columns we are working on
      if( colsToReduceBy.size() ) {
-       if( indexInCol == -1 ) {
-	 currentCol = colsToReduceBy.front();
+       if( indexInCurrentCols == -1 ) {
+	 currentCols = colsToReduceBy.front();
 	 currentColOutRequest = outRequests.front();
-	 colInCol = 0;
-	 indexInCol = 2; // this is very different from what it used to mean
+	 colInCurrentCols = 0;
+	 indexInCurrentCols = 2;
        }
-       for( list<int>::iterator it = GraphIn[currentCol[indexInCol+1]].ones.begin(); it != GraphIn[currentCol[indexInCol+1]].ones.end(); it++ ) {
-	 // *it is what was called j in the serial code
-	 if( *it < block*BLOCKSIZE+currentBlockSize ) {
+       
+       // this is the code to initialize a new column, still in currentCols
+       if( indexInCol == indexInColEndValue ) {
+	 indexInCol = GraphIn[currentCols[indexInCurrentCols+1]].ones.begin();
+	 indexInColEndValue = GraphIn[currentCols[indexInCurrentCols+1]].ones.end();
+       }
+
+       //for( list<int>::iterator it = GraphIn[currentCols[indexInCurrentCols+1]].ones.begin(); it != GraphIn[currentCols[indexInCurrentCols+1]].ones.end(); it++ ) {
+       for( int count = 0; count < MAX_ROWS_PER_CYCLE && indexInCol != indexInColEndValue; count++, indexInCol++ ) {
+	 // *indexInCol is what was called j in the serial code
+	 if( *indexInCol < block*BLOCKSIZE+currentBlockSize ) {
 	   continue; // these columns have already been dealt with
 	 }
-	 for( int k = indexInCol+1; k < indexInCol+1+currentCol[indexInCol]; k++ ) {
-	   list<int>::iterator search = find( GraphOut[*it].ones.begin(), GraphOut[*it].ones.end(), currentCol[k] );
-	   if( search != GraphOut[*it].ones.end() ) {
-	     GraphOut[*it].ones.erase(search);
-	     if( k != indexInCol+1 )
-	       GraphIn[currentCol[k]].ones.remove(*it);
+	 for( int k = indexInCurrentCols+1; k < indexInCurrentCols+1+currentCols[indexInCurrentCols]; k++ ) {
+	   list<int>::iterator search = find( GraphOut[*indexInCol].ones.begin(), GraphOut[*indexInCol].ones.end(), currentCols[k] );
+	   if( search != GraphOut[*indexInCol].ones.end() ) {
+	     GraphOut[*indexInCol].ones.erase(search);
+	     if( k != indexInCurrentCols+1 )
+	       GraphIn[currentCols[k]].ones.remove(*indexInCol);
 	   } else {
-	     GraphOut[*it].ones.push_back(currentCol[k]);
-	     if( k != indexInCol+1 )
-	       GraphIn[currentCol[k]].ones.push_back(*it);	       
+	     GraphOut[*indexInCol].ones.push_back(currentCols[k]);
+	     if( k != indexInCurrentCols+1 )
+	       GraphIn[currentCols[k]].ones.push_back(*indexInCol);	       
 	   }
 	 }
        }
-       GraphIn[currentCol[indexInCol+1]].ones.clear();
-       colInCol++;
-       indexInCol += currentCol[indexInCol]+1;
-       if( colInCol >= currentCol[1] ) { // this is the end condition
+       if( indexInCol == indexInColEndValue ) { // we have finished with a single column
+	 GraphIn[currentCols[indexInCurrentCols+1]].ones.clear();
+	 colInCurrentCols++;
+	 indexInCurrentCols += currentCols[indexInCurrentCols]+1;
+       }
+       if( colInCurrentCols >= currentCols[1] ) { // we have finished with an entire block of columns
 	 // make sure we have sent on this column before deleting it
 #ifdef PROFILE
 	 double deleteWait = read_timer();
@@ -609,8 +629,8 @@ int main(int argc, char *argv[]){
 	 totalDeleteWait += read_timer()-deleteWait;
 #endif
 	 
-	 free(currentCol);
-	 indexInCol = -1;
+	 free(currentCols);
+	 indexInCurrentCols = -1;
 	 colsToReduceBy.pop_front();
 	 outRequests.pop_front();
        }
@@ -618,6 +638,15 @@ int main(int argc, char *argv[]){
        continue;
      }
 
+#ifdef PROFILE
+     double waitStart = read_timer();
+#endif
+     MPI_Probe( prevProc, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
+#ifdef PROFILE
+     waitTime += read_timer()-waitStart;
+#endif
+
+     /*
      // Nothing useful to do, apparently, so let's run ahead a bit, although this work might be wasted
      int flag = false;
      int col = block*BLOCKSIZE;
@@ -655,6 +684,7 @@ int main(int argc, char *argv[]){
        MPI_Status stat;
        MPI_Iprobe( prevProc, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, &stat);
      }
+     */
    }
    if( !justTime )
      printf("(%d) Outside main reduction loop\n", rank);
@@ -688,7 +718,7 @@ int main(int argc, char *argv[]){
      printf("(%d) TAG gradings kdim=%d rank=%d\n", rank, kernelDimension, imageDimension );
    
 #ifdef PROFILE
-   printf("(%d) number of columns done out of order %d, number of empty blocks skipped %d, time spent waiting to delete %f\n", rank, colsAhead, numBlocksSkipped, totalDeleteWait);
+   printf("(%d) number of columns done out of order %d, number of empty blocks skipped %d, time spent waiting to delete %f, time spent waiting for messages %f\n", rank, colsAhead, numBlocksSkipped, totalDeleteWait, waitTime);
    /*
    printf("(%d) profile results, spent %d of %d cycles waiting", rank, totalWaitingCycles, totalCycles);
    printf("(%d) significant ones are:\n", rank);
