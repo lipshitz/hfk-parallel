@@ -289,7 +289,7 @@ int main(int argc, char *argv[]){
      if( index % BLOCKSIZE == 0 )
        globalIndex += BLOCKSIZE*(n_proc-1);
      globalIndex++;
-
+     printf("(%d) %d %d\n", rank, index, globalIndex);
      getPerm(cols[globalIndex],g);
      bool firstrect, secondrect;
      for(int i=0; i<gridsize; i++) {
@@ -347,6 +347,8 @@ int main(int argc, char *argv[]){
        }
      }
    }
+   //MPI_Finalize();
+   //exit(0);
    if( !justTime )
      printf("(%d) Matrix filled\n", rank);
 
@@ -401,7 +403,7 @@ int main(int argc, char *argv[]){
        globalTurn++;
      }
      // this line will produce a lot of output
-     //printf("(%d) in reduction, block = %d/%d, turn = %d(%d), numfinished = %d, selfFinished = %d(%d), colsToReduceBy.size = %lu, outRequests.size() = %lu\n", rank, block, numBlocks, turn, globalTurn, numProcReportingFinished, selfFinished, procsReportingFinished[rank], colsToReduceBy.size(), outRequests.size());
+     printf("(%d) in reduction, block = %d/%d, turn = %d(%d), numfinished = %d, selfFinished = %d(%d), colsToReduceBy.size = %lu, outRequests.size() = %lu\n", rank, block, numBlocks, turn, globalTurn, numProcReportingFinished, selfFinished, procsReportingFinished[rank], colsToReduceBy.size(), outRequests.size());
 
      // check if we have received a notification that another processor is done
      if( !allOthersFinished ) {
@@ -554,7 +556,9 @@ int main(int argc, char *argv[]){
 	       for( int target = block*BLOCKSIZE; target < block*BLOCKSIZE+currentBlockSize; target++ )
 		 resolveCols(GraphOut, GraphIn, columnsFromQueue+colStartIndex+1, columnsFromQueue[colStartIndex], target);
 	   }
-	 } else { // we are done, let the other processes know
+	 }
+       }
+       if( block >= numBlocks ) { // we are done, let the other processes know
 	   selfFinished = true;
 	   procsReportingFinished[rank] = globalTurn;
 	   numProcReportingFinished++;
@@ -562,7 +566,6 @@ int main(int argc, char *argv[]){
 	   finishedSignals[0] = rank;
 	   finishedSignals[1] = globalTurn;
 	   MPI_Isend( finishedSignals, 2, MPI_INT, nextProc, TAG_FINISHED, MPI_COMM_WORLD, &req);
-	 }
        }
        continue;
      }
