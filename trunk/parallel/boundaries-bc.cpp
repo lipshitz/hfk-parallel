@@ -107,7 +107,7 @@ int main(int argc, char *argv[]){
  int AHEAD_LIMIT = read_int( argc, argv, "-l", n_proc/2 );
 
  if( aGrading == -100 || mGrading == -100 ) {
-   printf("Must specify in which grading to calculate the boundary image and kernel dimensions with -a and -g\n");
+   printf("Must specify in which grading to calculate the boundary image and kernel dimensions with -a and -m\n");
    MPI_Finalize();
    exit(0);
  }
@@ -289,7 +289,6 @@ int main(int argc, char *argv[]){
      if( index % BLOCKSIZE == 0 )
        globalIndex += BLOCKSIZE*(n_proc-1);
      globalIndex++;
-     printf("(%d) %d %d\n", rank, index, globalIndex);
      getPerm(cols[globalIndex],g);
      bool firstrect, secondrect;
      for(int i=0; i<gridsize; i++) {
@@ -403,7 +402,7 @@ int main(int argc, char *argv[]){
        globalTurn++;
      }
      // this line will produce a lot of output
-     printf("(%d) in reduction, block = %d/%d, turn = %d(%d), numfinished = %d, selfFinished = %d(%d), colsToReduceBy.size = %lu, outRequests.size() = %lu\n", rank, block, numBlocks, turn, globalTurn, numProcReportingFinished, selfFinished, procsReportingFinished[rank], colsToReduceBy.size(), outRequests.size());
+     //printf("(%d) in reduction, block = %d/%d, turn = %d(%d), numfinished = %d, selfFinished = %d(%d), colsToReduceBy.size = %lu, outRequests.size() = %lu\n", rank, block, numBlocks, turn, globalTurn, numProcReportingFinished, selfFinished, procsReportingFinished[rank], colsToReduceBy.size(), outRequests.size());
 
      // check if we have received a notification that another processor is done
      if( !allOthersFinished ) {
