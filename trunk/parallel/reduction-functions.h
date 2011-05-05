@@ -11,7 +11,11 @@ void increment( int &turn, int fP, int nP ) {
 
 // add column to c in the graph if the first one of column also appears in c
 // it would be very inefficient to use this for full matrix reduction, but it should be fine if used only on a single column
+#ifdef PROFILE
+void resolveCols(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int* column, int size, int c, int &nnz) {
+#else
 void resolveCols(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int* column, int size, int c) {
+#endif
   int pivot = column[0];
   list<int> &col2 = GraphOut[c].ones;
   list<int>::iterator location = find(col2.begin(), col2.end(), pivot);
@@ -21,10 +25,16 @@ void resolveCols(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int* c
     list<int>::iterator search = find( GraphOut[c].ones.begin(), GraphOut[c].ones.end(), column[k] );
     if( search != GraphOut[c].ones.end() ) {
       GraphOut[c].ones.erase(search);
+#ifdef PROFILE
+      nnz--;
+#endif
       if( column[k] != pivot ) 
 	GraphIn[column[k]].ones.remove(c);
     } else {
       GraphOut[c].ones.push_back(column[k]);
+#ifdef PROFILE
+      nnz++;
+#endif
       if( column[k] != pivot )
 	GraphIn[column[k]].ones.push_back(c);
     }
@@ -32,7 +42,11 @@ void resolveCols(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int* c
 }
 
 // for resolving with a column in GraphOut
+#ifdef PROFILE
+void resolveColsInternal(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int column, int c, int &nnz) {
+#else
 void resolveColsInternal(vector<Generator> &GraphOut, vector<Generator> &GraphIn, int column, int c) {
+#endif
   list<int>::iterator k = GraphOut[column].ones.begin();
   if( k == GraphOut[column].ones.end() )
     return; // column is empty
@@ -45,10 +59,16 @@ void resolveColsInternal(vector<Generator> &GraphOut, vector<Generator> &GraphIn
     list<int>::iterator search = find( GraphOut[c].ones.begin(), GraphOut[c].ones.end(), *k );
     if( search != GraphOut[c].ones.end() ) {
       GraphOut[c].ones.erase(search);
+#ifdef PROFILE
+      nnz--;
+#endif
       //if( *k != pivot )  // I don't think we want these conditions
 	GraphIn[*k].ones.remove(c);
     } else {
       GraphOut[c].ones.push_back(*k);
+#ifdef PROFILE
+      nnz++;
+#endif
       //if( *k != pivot )
 	GraphIn[*k].ones.push_back(c);
     }
