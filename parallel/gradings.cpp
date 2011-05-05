@@ -96,6 +96,7 @@ int main(int argc, char *argv[]){
  bool printMatrices = read_int( argc, argv, "-p", 0 );
  bool justTime = read_int( argc, argv, "-t", 0 );
  char *saveDir = read_string( argc, argv, "-o", NULL );
+ const int min_depth = read_int( argc, argv, "-d", 4 ); // This is the depth from which the master hands out packets
  if( knotFile ) {
    FILE *f = fopen(knotFile, "r");
    if( !f ) {
@@ -208,7 +209,6 @@ int main(int argc, char *argv[]){
    printf("Searching through %lld generators to compute Alexander gradings...\n", Factorial[gridsize]);
  double agStartTime = read_timer();
 
- const int min_depth = 2; // This is the depth from which the master hands out packets
  int num_generators[60*60];
  if( rank == 0 ) {
    // Assign the partitions and collect the results
@@ -327,6 +327,7 @@ int main(int argc, char *argv[]){
 
  }
 
+ MPI_Barrier(MPI_COMM_WORLD);
  if( rank == 0 )
    printf("Time to compute all gradings %f\n", read_timer()-agStartTime); 
 
