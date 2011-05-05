@@ -1,3 +1,6 @@
+//#define PROFILE
+
+
 #include <sys/time.h>
 #include <iostream>
 #include <stdlib.h>
@@ -17,7 +20,6 @@
 using std::list;
 using std::vector;
 
-#define PROFILE
 
 int find_option( int argc, char **argv, const char *option )
 {
@@ -252,6 +254,13 @@ int main(int argc, char *argv[]){
    cols.assign(buffer, buffer+num_generators);
  
  int imageDimension, kernelDimension;
+#ifdef PROFILE
+   int colsAhead = 0;
+   int numBlocksSkipped = 0;
+   double totalDeleteWait = 0;
+   double waitTime = 0;
+   int nnz = 0;
+#endif
 
  if( cols.size() == 0 || rows.size() == 0 ) {
    imageDimension = 0;
@@ -322,6 +331,9 @@ int main(int argc, char *argv[]){
 	   }
 	 }
 	 if(firstrect != secondrect) { // Exactly one rectangle is a boundary
+#ifdef PROFILE
+	   nnz++;
+#endif
 	   int gij [gridsize];
 	   for(int k=0; k<i; k++) {
 	     gij[k] = g[k];
@@ -357,12 +369,6 @@ int main(int argc, char *argv[]){
 #define TAG_COLUMN 11
 #define TAG_FINISHED 12
 
-#ifdef PROFILE
-   int colsAhead = 0;
-   int numBlocksSkipped = 0;
-   double totalDeleteWait = 0;
-   double waitTime = 0;
-#endif
    int nextProc = rank + 1;
    if( nextProc == n_proc )
      nextProc = 0;
@@ -469,7 +475,12 @@ int main(int argc, char *argv[]){
 	     int colStartIndex = 2;
 	     for( int col = 0; col < inCols[1]; col++, colStartIndex += inCols[colStartIndex]+1 )
 	       for( int target = block*BLOCKSIZE; target < block*BLOCKSIZE+currentBlockSize; target++ )
+#ifdef PROFILE
+		 resolveCols(GraphOut, GraphIn, inCols+colStartIndex+1, inCols[colStartIndex], target, nnz);
+#else
 		 resolveCols(GraphOut, GraphIn, inCols+colStartIndex+1, inCols[colStartIndex], target);
+#endif
+
 	   }
 	 }
 
@@ -488,8 +499,11 @@ int main(int argc, char *argv[]){
        */
        for( int source = block*BLOCKSIZE; source < block*BLOCKSIZE+currentBlockSize-1; source++ )
 	 for( int target = source+1; target < block*BLOCKSIZE+currentBlockSize; target++ )
+#ifdef PROFILE
+	   resolveColsInternal(GraphOut, GraphIn, source, target, nnz);
+#else
 	   resolveColsInternal(GraphOut, GraphIn, source, target);
-
+#endif
        // assemble them to send       
        int numColumns=0, *columns, totalEntries=0;
        for( int source = block*BLOCKSIZE; source < block*BLOCKSIZE+currentBlockSize; source++ ) {
@@ -529,6 +543,9 @@ int main(int argc, char *argv[]){
        increment(turn, 0, n_proc);
        globalTurn++;
 
+#ifdef PROFILE
+       printf("(%d) nnz= %d block=%d/%d\n", rank, nnz, block, numBlocks);
+#endif
        block++;
        if( block == numFullBlocks )
 	 currentBlockSize = tailSize;
@@ -558,7 +575,11 @@ int main(int argc, char *argv[]){
 	     int colStartIndex = 2;
 	     for( int col = 0; col < columnsFromQueue[1]; col++, colStartIndex += columnsFromQueue[colStartIndex]+1 )
 	       for( int target = block*BLOCKSIZE; target < block*BLOCKSIZE+currentBlockSize; target++ )
+#ifdef PROFILE
+		 resolveCols(GraphOut, GraphIn, columnsFromQueue+colStartIndex+1, columnsFromQueue[colStartIndex], target, nnz);
+#else
 		 resolveCols(GraphOut, GraphIn, columnsFromQueue+colStartIndex+1, columnsFromQueue[colStartIndex], target);
+#endif
 	   }
 	 }
        }
@@ -605,10 +626,16 @@ int main(int argc, char *argv[]){
 	   list<int>::iterator search = find( GraphOut[*indexInCol].ones.begin(), GraphOut[*indexInCol].ones.end(), currentCols[k] );
 	   if( search != GraphOut[*indexInCol].ones.end() ) {
 	     GraphOut[*indexInCol].ones.erase(search);
+#ifdef PROFILE
+	     nnz--;
+#endif
 	     if( k != indexInCurrentCols+1 )
 	       GraphIn[currentCols[k]].ones.remove(*indexInCol);
 	   } else {
 	     GraphOut[*indexInCol].ones.push_back(currentCols[k]);
+#ifdef PROFILE
+	     nnz++;
+#endif
 	     if( k != indexInCurrentCols+1 )
 	       GraphIn[currentCols[k]].ones.push_back(*indexInCol);	       
 	   }
