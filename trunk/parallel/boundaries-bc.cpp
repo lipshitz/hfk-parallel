@@ -1,4 +1,4 @@
-//#define PROFILE
+#define PROFILE
 
 
 #include <sys/time.h>
@@ -544,7 +544,7 @@ int main(int argc, char *argv[]){
        globalTurn++;
 
 #ifdef PROFILE
-       printf("(%d) nnz= %d block=%d/%d\n", rank, nnz, block, numBlocks);
+       printf("(%d) nnz= %d block= %d /%d\n", rank, nnz, block, numBlocks);
 #endif
        block++;
        if( block == numFullBlocks )
