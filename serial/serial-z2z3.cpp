@@ -1,4 +1,4 @@
-#include <time.h>
+#include <sys/time.h>
 #include <iostream>
 #include <stdlib.h>
 #include <stdio.h>
@@ -34,6 +34,20 @@ char *read_string( int argc, char **argv, const char *option, char *default_valu
     if( iplace >= 0 && iplace < argc-1 )
         return argv[iplace+1];
     return default_value;
+}
+
+double read_timer( )
+{
+    static bool initialized = false;
+    static struct timeval start;
+    struct timeval end;
+    if( !initialized )
+    {
+        gettimeofday( &start, NULL );
+        initialized = true;
+    }
+    gettimeofday( &end, NULL );
+    return (end.tv_sec - start.tv_sec) + 1.0e-6 * (end.tv_usec - start.tv_usec);
 }
 
 // Globals
@@ -78,6 +92,7 @@ long long Factorial[16] = {
 
 // Function Prototypes
 
+bool sign(int *x, int bottom, int top, int left, int right);
 void getPerm(long long k, int h []); // Fills h with the k^th permutation (in lexico. order)
 void NextPerm(short counter[], int h[]);
 bool RectDotFree(int xll, int yll, int xur, int yur, int which); 
@@ -137,7 +152,7 @@ int  numcomp = NumComp();
  printf("Number of components: %d\n", numcomp);
 
  if(!ValidGrid()) {printf("Invalid grid!!\n"); return 0;} // Check that the grid is valid
- time_t starttime = time(NULL); // Used to record how long this takes
+ double starttime = read_timer(); // Used to record how long this takes
 
  // Record winding numbers around grid points for Alexander grading computations
  // Also record the Alexander grading shift
@@ -230,7 +245,7 @@ int  numcomp = NumComp();
  
  for(int i=0; i<60; i++) NumGenByAGrading[i]=0;
  printf("Searching through %lld generators to compute Alexander gradings...\n", Factorial[gridsize]);
- time_t agStartTime = time(NULL);
+ double agStartTime = read_timer();
 
  int g[gridsize];
  int taken[gridsize];
@@ -293,7 +308,7 @@ int  numcomp = NumComp();
      AGrading += WN[depth][g[depth]];
    }
  }
- printf("Time to compute all Alexander gradings %ld\n", time(NULL)-agStartTime); 
+ printf("Time to compute all Alexander gradings %f\n", read_timer()-agStartTime); 
 
  for(int i=0;i<60;i++) {
    if(NumGenByAGrading[i]>0) printf("Number of generators in Alexander grading %d: %d\n", (i-30), NumGenByAGrading[i]);
@@ -302,7 +317,6 @@ int  numcomp = NumComp();
    for( int j = 0; j < 60; j++ )
      if (generators[i][j]->size())
        printf("Alexander grading %d, Maslov grading %d, num generators %lu\n", i-30, j-30, generators[i][j]->size());
- 
 
  // Calculate the homology groups
  for( int I = 0; I < 60; I++ )
@@ -322,12 +336,31 @@ int  numcomp = NumComp();
        getPerm(cols[index],g);
        bool firstrect, secondrect;
        for(int i=0; i<gridsize; i++) {
+/*
+ 1 | 2 | 1
+---+---+---
+ 3 | 0 | 3
+---+---+---
+ 1 | 2 | 1 
+
+*/
 	 for(int j=i+1; j<gridsize; j++) {
+#ifdef FIELD_Z3
+	   int bottom, top, left, right;
+#endif
 	   if(g[i]<g[j]) {
 	     firstrect = Rectangles[i][g[i]][j][g[j]][0];
 	     for(int k=i+1; k<j && firstrect; k++) {
 	       if(g[i] < g[k] && g[k] < g[j]) firstrect=0;
 	     }
+#ifdef FIELD_Z3
+	     if( firstrect ) {
+	       bottom = g[i];
+	       top = g[j];
+	       left = i;
+	       right = j;
+	     }
+#endif
 	     secondrect = Rectangles[i][g[i]][j][g[j]][1];
 	     for(int k=0; k<i && secondrect; k++) {
 	       if(g[k]<g[i] || g[k] > g[j]) secondrect=0;
@@ -335,12 +368,28 @@ int  numcomp = NumComp();
 	     for(int k=j+1; k<gridsize && secondrect; k++) {
 	       if(g[k]<g[i] || g[k] > g[j]) secondrect=0;
 	     }
+#ifdef FIELD_Z3
+	     if( secondrect ) {
+	       bottom = g[j];
+	       top = g[i];
+	       left = j;
+	       right = i;
+	     }
+#endif
 	   }
 	   if(g[j]<g[i]) {
 	     firstrect = Rectangles[i][g[j]][j][g[i]][2];
 	     for(int k=i+1; k<j && firstrect; k++) {
 	       if(g[k]<g[j] || g[k] > g[i]) firstrect=0;
 	     }
+#ifdef FIELD_Z3
+	     if( firstrect ) {
+	       bottom = g[j];
+	       top = g[i];
+	       left = i;
+	       right = j;
+	     }
+#endif
 	     secondrect = Rectangles[i][g[j]][j][g[i]][3];
 	     for(int k=0; k<i && secondrect; k++) {
 	       if(g[k]>g[j] && g[k]<g[i]) secondrect=0;
@@ -348,6 +397,14 @@ int  numcomp = NumComp();
 	     for(int k=j+1; k<gridsize && secondrect; k++) {
 	       if(g[k]>g[j] && g[k]<g[i]) secondrect=0;
 	     }
+#ifdef FIELD_3
+	     if( secondrect ) {
+	       bottom = g[i];
+	       top = g[j];
+	       left = j;
+	       right = i;
+	     }
+#endif
 	   }
 	   if(firstrect != secondrect) { // Exactly one rectangle is a boundary
 	     int gij [gridsize];
@@ -366,11 +423,14 @@ int  numcomp = NumComp();
 	     int indexgij = Find(rows,Indexgij);
 	     if(indexgij==-1) {printf("Error with Alexander grading: %lld\n", Indexgij); return 0; }
 #ifdef FIELD_Z3
-	     //printf("Not implemented\n");
-	     //exit(-1);
-	     GraphOut[index].ones.push_back( indexgij );
-	     GraphIn[indexgij].ones.push_back( index );
-	     // This is, of course, wrong
+	     //printf("%d %d %d %d %d %d\n", i, j, bottom, top, left, right);
+	     if( sign(g, bottom, top, left, right) ) {
+	       GraphOut[index].twos.push_back( indexgij );
+	       GraphIn[indexgij].twos.push_back( index );
+	     } else {
+	       GraphOut[index].ones.push_back( indexgij );
+	       GraphIn[indexgij].ones.push_back( index );
+	     }
 #else
 	     GraphOut[index].ones.push_back( indexgij );
 	     GraphIn[indexgij].ones.push_back( index );
@@ -749,8 +809,8 @@ int  numcomp = NumComp();
    }
  }
  printf("\n");
- time_t endtime = time(NULL);
- printf("Total time elapsed: %ld seconds.\n", endtime - starttime);
+ double endtime = read_timer();
+ printf("Total time elapsed: %f seconds.\n", endtime - starttime);
 
  return 0;
 }
@@ -941,4 +1001,63 @@ void getPerm( long long n, int *P ) {
     P[i] = offset;
     taken[P[i]] = 1;
   }
+}
+
+bool thinSign(int *x, int bottom, int top, int left) { 
+  // the formula does'nt apply if the top row is in the recangle
+  if( top < bottom )
+    return !thinSign(x, top, bottom, left);
+
+  // case 1: the rectangle isn't the right-most one, formula 9 in OSVT
+  if( left < gridsize-1 ) {
+    int count = 0;
+    for( int a1 = 0; a1 < gridsize; a1++ ) {
+      int a2 = x[a1];
+      if( a2 >= top ) // then there is no possible point
+	continue;
+      for( int b1 = a1+1; b1 < gridsize; b1++ )
+	if( x[b1] < top && x[b1] > a2 )
+	  count++;
+    }
+    return( count%2 );
+  }
+  // case 2: the rectangle is the right-most one, formula 10 in OSVT
+  int count = top;
+  for( int a1 = 0; a1 < gridsize; a1++ ) {
+    int a2 = x[a1];
+    if( a2 >= top ) // then there is no possible point
+      continue;
+    for( int b1 = a1+1; b1 < gridsize; b1++ ) {
+      int b2 = x[b1];
+      if( b2 <= bottom && b2 > b1 )
+	count++;
+      else if( b2 < top && b2 > b1 && (b2%2==0) )
+	count++;
+    }
+  }
+  return( count%2 );
+}
+
+// recursively calculate the sign, calling thinSign as the base case
+bool sign(int *x, int bottom, int top, int left, int right) { 
+  if( right-left == 1 || (right == 0 && left == gridsize-1) )
+    return thinSign(x, bottom, top, left);
+  
+  // we'll need to fix what follows to give a special case when right=0 (that is, if the rectangle wraps around and that is where we are working)
+
+  int newRight;
+  if( right != 0 ) 
+    newRight = right-1;
+  else
+    newRight = gridsize-1;
+  int newTop = x[newRight];
+  // create three new rectangles, two of them thin, by adding the point right-1,x[right-1]
+  bool ret = true;
+  if( !sign(x, bottom, newTop, newRight, right) ) // the rightmost, tall rectangle
+    ret = !ret;
+  if( !sign(x, top, newTop, newRight, right) ) // the top-right rectangle
+    ret = !ret;
+  if( !sign(x, bottom, top, left, newRight) )
+    ret = !ret;
+  return ret;
 }
