@@ -2,7 +2,10 @@ CC = g++
 LINBOX =  -L/usr/local/lib -L/usr/local/lib64 -llinbox -lgivaro -lgmpxx -lgmp -lcblas -llapack
 #CFLAGS = -O3
 
-TARGETS = orig serial-hfk low-mem sparse-linbox serial-hfk-split serial-z2z3
+TARGETS = orig serial-hfk low-mem sparse-linbox serial-hfk-split serial-z2z3 serial-hfk-split-link
+WORKING = orig serial-hfk serial-hfk-split serial-hfk-split-link
+
+good:	$(WORKING)
 
 all:	$(TARGETS)
 
@@ -20,6 +23,9 @@ serial-z2z3: serial-z2z3.cpp matrix-z2z3.h
 
 serial-hfk-split: serial-hfk-split.cpp matrix.h
 	$(CC) -o $@ $(LIBS) serial-hfk-split.cpp
+
+serial-hfk-split-link: serial-hfk-split-link.cpp matrix.h
+	$(CC) -o $@ $(LIBS) serial-hfk-split-link.cpp
 
 serial-hfk: serial-hfk.cpp
 	$(CC) -o $@ $(LIBS) serial-hfk.cpp

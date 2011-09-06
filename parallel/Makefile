@@ -1,3 +1,5 @@
+useful:	gradings fullv1 boundaries-bc
+
 all:	gradings fullv1 boundaries boundaries-bc boundaries-bc-set nnz boundaries-serial
 
 gradings:	gradings.cpp

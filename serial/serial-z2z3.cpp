@@ -146,6 +146,7 @@ int main(int argc, char *argv[]){
  Factorial[15] = 15*Factorial[14];
 
  int amin=0;
+	// int amin=-1; // this is stupid
  int amax=20;
 
 int  numcomp = NumComp();
