@@ -1,0 +1,5 @@
+To compile the code here you may need to change the first line of the Makefile by replacing "g++" with the command for your c++ compiler.  After that, typing "make" should compile the useful programs described below.
+
+The most useful three versions here are serial-hfk, serial-hfk-split, and serial-hfk-split-link.  Of them, serial-hfk should be the fastest, whereas the others will take up to twice as long, but use less memory.  Additonally, serial-hfk-split-link has some modifications that hopefully deal with links correctly.  If in doubt, use serial-hfk-split-link.
+Usage: ./serial-hfk-split-link -k <knot file>
+

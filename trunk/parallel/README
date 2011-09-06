@@ -1,0 +1,13 @@
+All versions in this directory require a multiprocessor machine/cluster with MPI installed.  I assume you know how to execute MPI programs on your machine.
+
+The simplest version here is called "fullv1", which will do the entire computation and behaves similarly to the serial versions.  However it is much less robust than the separated version that I recommend.
+
+The most functional version splits the calculation into two parts, "gradings", and "boundaries-bc".  To use this version you will need to select a directory to hold intermediate results.
+gradings usage:
+  gradings -k <knot_file> -o <save_directory> [-d <min_depth>]
+    optional argument: min_depth controls how the work is distributed between the processors.  A higher value will put more burden on the master process, but a lower value will have less load balancing.  I found values between 4 and 6 to be most useful.
+boundaries usage:
+  boundaries-bc -i <save_directory> -a <Alexander_Grading> -m <Maslov_Grading> [-b <blocksize> -q <max_queue_size> -l <ahead_limit> -r <max_rows_per_cycle>]
+    Each invocation will work only for generators in one grading.  To get useful output it will still be necessary to combine the kernel and image dimensions as is done in the serial code and fullv1.
+    Optional arguments: there are several that will affect the performance.  The defaults are what I found to work well, but other values might be useful on some machines.
+Unfortunately there is currently no program to compile the data from <save_directory>/bnd*.dat into useful output, although It shouldn't be hard to write or do by hand.

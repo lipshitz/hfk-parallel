@@ -1,0 +1,9 @@
+This repository contains code for computing Heegaard Floer knot homology.  This file contains an overview of the contents of each directory.  Also see README files in each directory.
+
+baldwin-gillam: This directory contains the original code written by Baldwin and Gillam.  It should all work, but it is slower and less user friendly than the other options.
+
+knots: This directory contains the grid representations of a few knots for use as inputs.  See the README in this directory to learn the format
+
+serial: This directory contains various versions of the code for running on a single processor.  If you plan to run this on your desktop/laptop, you probably want to use these versions.  See the README file there for the advantages/disadvantages of each.  These should be able to compute for any grid representation up to size 12 within a few minutes, and certain larger ones if you are patient.
+
+parallel: This directory contains various versions for running in parallel, probably on a cluster.  You will need MPI to use any of them, and they are only useful if you want to compute for knots with grid representations of size 13 - 16.  You may need a large, distributed memory machine with hundreds of gigabytes of memory to compute at the upper end of that range.
