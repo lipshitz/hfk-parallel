@@ -1,37 +1,46 @@
+#ifndef MATRIX_H
+#define MATRIX_H
+
 #include <stdio.h>
+#include <stdlib.h>
 #include <list>
 #include <vector>
-
-using std::list;
-using std::vector;
+#include <algorithm>
+#include "gradings.h"
 
 class GeneratorIn {
  public:
- list<int> in;
- bool alive;
- GeneratorIn();
- ~GeneratorIn();
+  std::list<int> in;
+  bool alive;
+  GeneratorIn();
+  ~GeneratorIn();
 };
 
 class GeneratorOut {
  public:
- list<int> out;
- bool alive;
- GeneratorOut();
- ~GeneratorOut();
+  std::list<int> out;
+  bool alive;
+  GeneratorOut();
+  ~GeneratorOut();
 };
 
-// Class Functions
 
-GeneratorIn::GeneratorIn(){alive=1;};
-GeneratorIn::~GeneratorIn(){};
-GeneratorOut::GeneratorOut(){alive=1;};
-GeneratorOut::~GeneratorOut(){};
+void getPerm(generator k, int h [], int gridsize); // Fills h with the k^th permutation (in lexico. order)
+int rectIndex(int i, int j, int k, int l, int m, int gridsize);
+generator getIndex( int *P, int gridsize );
+int Find(std::vector<generator> & V, generator x);
+generator factorial( int );
+void printMatrix( char*, std::vector<GeneratorOut> );
+int fillReduceKernel( std::vector<generator>&, std::vector<generator>&, int);
+// Decides whether one of the four rectangles on the torus with corners at(xll,yll) and (xur,yur) contains no white or black dots
+/*
+ 1 | 2 | 1
+---+---+---
+ 3 | 0 | 3
+---+---+---
+ 1 | 2 | 1
+*/
+bool RectDotFree(int xll, int yll, int xur, int yur, int which, int*, int*, int); 
+void initRectangles(int gridsize, int *white, int *black);
 
-void printMatrix( char* fileName, vector<GeneratorOut> mat ) {
-  FILE *f = fopen(fileName, "w");
-  for( int i = 0; i < mat.size(); i++ )
-    for( list<int>::iterator j = mat[i].out.begin(); j != mat[i].out.end(); j++ )
-      fprintf(f, "%d %d %e\n", i+1, *j+1, 1.);
-  fclose(f);
-}
+#endif

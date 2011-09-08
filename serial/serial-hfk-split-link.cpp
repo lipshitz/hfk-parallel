@@ -6,7 +6,7 @@
 #include <vector>
 #include <list>
 #include <algorithm>
-#include "matrix.h"
+#include "matrix-old.h"
 using std::list;
 using std::vector;
 
